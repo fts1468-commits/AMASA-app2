@@ -1,11 +1,46 @@
-<div align="center">
+# AMASA | منصة إدارة وحجوزات الشاليهات والاستراحات
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+منصة متكاملة لإدارة وحجوزات الشاليهات والاستراحات الفاخرة، إدارة الموظفين والمسوقين (نظام العمولات 5%)، وعمليات الدخول والخروج للحارس.
 
-  <h1>Built with AI Studio</h2>
+---
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+## تشغيل نسخة الإنتاج الجاهزة (بدون أي اعتمادات أو npm install):
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+إذا كنت في بيئة مغلقة (Offline / لا يوجد اتصال بـ npmjs.org):
+1. قم بفك ضغط ملف `amasa-dist.zip`.
+2. شغّل مباشرة عبر Node.js:
+   ```bash
+   node serve.cjs
+   ```
+   أو عبر Python:
+   ```bash
+   python3 serve.py
+   ```
+   أو:
+   ```bash
+   python3 -m http.server 3000
+   ```
+3. افتح المتصفح على: `http://localhost:3000`
 
-</div>
+---
+
+## تشغيل الكود المصدري في وضع التطوير (Development):
+
+إذا كان لديك اتصال بالإنترنت لتثبيت الحزم:
+```bash
+npm install
+npm run dev
+```
+
+لإعادة بناء نسخة الإنتاج:
+```bash
+npm run build
+```
+
+---
+
+## التقنيات المستخدمة:
+- React 19 + TypeScript
+- Vite
+- Tailwind CSS v4
+- Lucide React Icons

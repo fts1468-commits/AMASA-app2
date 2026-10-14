@@ -1,0 +1,33 @@
+{
+  "entities": {
+    "Property": {
+      "title": "Property",
+      "description": "Property or resort information including units and pricing",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "location": { "type": "string" },
+        "subUnitsCount": { "type": "number" },
+        "basePriceWeekday": { "type": "number" },
+        "basePriceWeekend": { "type": "number" },
+        "isPublished": { "type": "boolean" },
+        "coverImage": { "type": "string" },
+        "images": { "type": "array" },
+        "features": { "type": "array" },
+        "sections": { "type": "array" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    }
+  },
+  "firestore": {
+    "/properties/{propertyId}": {
+      "schema": "Property",
+      "description": "Properties collection for resorts and chalets"
+    }
+  }
+}

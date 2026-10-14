@@ -1,0 +1,6 @@
+{
+  "name": "AMASA | منصة إدارة وحجوزات الشاليهات",
+  "description": "منصة إدارة وحجوزات الشاليهات والاستراحات الفاخرة، إدارة الموظفين والمسوقين، وعمليات الدخول والخروج للحارس",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

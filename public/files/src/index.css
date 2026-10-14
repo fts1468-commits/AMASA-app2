@@ -1,0 +1,195 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+  box-sizing: border-box;
+  /* iPhone 13 Pro Max safe areas */
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+}
+
+body {
+  font-family: 'Tajawal', system-ui, -apple-system, sans-serif;
+  background-color: #F8F6FD;
+  color: #1F2937;
+  margin: 0;
+  min-height: 100vh;
+  min-height: -webkit-fill-available;
+  padding-top: var(--sat);
+}
+
+html {
+  height: -webkit-fill-available;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1edfa;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbbbe6;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9d81d2;
+}
+
+/* Safe area padding for mobile bottom bar */
+.pb-safe {
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 0.5rem);
+}
+
+/* Shiny Mauve Button (زر بنفسجي لامع متحرك يلفت الانتباه) */
+@keyframes shimmer-slide {
+  0% {
+    transform: translateX(-160%) skewX(-25deg);
+    opacity: 0.2;
+  }
+  30% {
+    opacity: 1;
+  }
+  60%, 100% {
+    transform: translateX(280%) skewX(-25deg);
+    opacity: 0;
+  }
+}
+
+/* Shiny Mauve Button (زر بنفسجي فاخر مع شعاع أبيض متحرك بدون نبض) */
+.btn-mauve-shiny {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, #4A1266 0%, #6B21A8 25%, #8B2FC9 50%, #A855F7 70%, #58167D 100%);
+  background-size: 200% 200%;
+  color: #ffffff;
+  box-shadow: 0 4px 16px -2px rgba(126, 34, 206, 0.45);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.btn-mauve-shiny:hover {
+  filter: brightness(1.1);
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 10px 35px 8px rgba(147, 51, 234, 0.75), 0 0 20px 4px rgba(216, 180, 254, 0.7);
+}
+
+.btn-mauve-shiny:active {
+  transform: translateY(0) scale(0.99);
+}
+
+.btn-mauve-shiny::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 80%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.15) 20%,
+    rgba(255, 255, 255, 0.85) 50%,
+    rgba(255, 255, 255, 0.15) 80%,
+    transparent 100%
+  );
+  animation: shimmer-slide 2.5s infinite ease-in-out;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.btn-mauve-shiny::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 50%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0.05) 80%, transparent 100%);
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Shiny Amber Button (الزر الذهبي الفاخر مع نفس الشعاع الأبيض وبدون نبض) */
+.btn-amber-shiny {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, #FBBF24 0%, #F59E0B 50%, #D97706 100%);
+  color: #78350F;
+  box-shadow: 0 4px 14px -2px rgba(245, 158, 11, 0.35);
+  transition: all 0.25s ease;
+}
+
+.btn-amber-shiny:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1.5px) scale(1.015);
+  box-shadow: 0 8px 26px 4px rgba(245, 158, 11, 0.65);
+}
+
+.btn-amber-shiny:active {
+  transform: translateY(0) scale(0.99);
+}
+
+.btn-amber-shiny::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 80%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.15) 20%,
+    rgba(255, 255, 255, 0.85) 50%,
+    rgba(255, 255, 255, 0.15) 80%,
+    transparent 100%
+  );
+  animation: shimmer-slide 2.5s infinite ease-in-out;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.btn-amber-shiny::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 50%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0.05) 80%, transparent 100%);
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* General White Beam Shimmer for any button or card */
+.btn-beam-shine {
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-beam-shine::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 80%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.15) 20%,
+    rgba(255, 255, 255, 0.85) 50%,
+    rgba(255, 255, 255, 0.15) 80%,
+    transparent 100%
+  );
+  animation: shimmer-slide 2.5s infinite ease-in-out;
+  pointer-events: none;
+  z-index: 1;
+}
