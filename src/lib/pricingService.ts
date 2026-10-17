@@ -10,10 +10,11 @@ export function getResolvedDatePrice(
   sectionId: string | undefined | null,
   dateKey: string,
   dateOverrides: Record<string, DateOverride>,
-  properties: Property[]
+  properties: Property[],
+  weekendDays: number[] = [4, 5]
 ): number {
   const dateObj = new Date(dateKey);
-  const isWeekend = dateObj.getDay() === 4 || dateObj.getDay() === 5; // Thursday & Friday
+  const isWeekend = weekendDays.includes(dateObj.getDay());
 
   // Direct explicit override on this exact property + section + date
   const directKey = sectionId && sectionId !== 'all'
@@ -249,3 +250,91 @@ export function isDateBlockedCrossProperty(
 
   return { isBlocked: false, isWaitingDeposit: false };
 }
+
+/**
+ * Parses YYYY-MM-DD safely at midday to avoid any timezone/DST drift.
+ */
+export function parseMiddayDate(dateStr: string): Date {
+  const parts = dateStr.split('-').map(Number);
+  return new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0);
+}
+
+/**
+ * Formats a Date to YYYY-MM-DD safely.
+ */
+export function formatMiddayDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Returns an array of consecutive date strings between start and end (inclusive).
+ */
+export function getConsecutiveDatesRange(startDate: string, endDate: string): string[] {
+  if (!startDate || !endDate) return startDate ? [startDate] : endDate ? [endDate] : [];
+  const start = startDate <= endDate ? startDate : endDate;
+  const end = startDate <= endDate ? endDate : startDate;
+
+  const dates: string[] = [];
+  const curr = parseMiddayDate(start);
+  const last = parseMiddayDate(end);
+
+  while (curr <= last) {
+    dates.push(formatMiddayDate(curr));
+    curr.setDate(curr.getDate() + 1);
+  }
+  return dates;
+}
+
+/**
+ * Strictly verifies if an array of date strings are continuous/consecutive without any gaps.
+ */
+export function areDatesConsecutive(dates: string[]): boolean {
+  if (!dates || dates.length <= 1) return true;
+  const sorted = [...dates].sort();
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const d1 = parseMiddayDate(sorted[i]);
+    const d2 = parseMiddayDate(sorted[i + 1]);
+    const diffDays = Math.round((d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays !== 1) return false;
+  }
+  return true;
+}
+
+/**
+ * Checks if a proposed list of consecutive dates intersects with any confirmed booking.
+ * Returns { isFree: true } or { isFree: false, blockedDate: string, reason: string }
+ */
+export function checkBookingRangeAvailability(
+  propertyId: string,
+  sectionId: string | undefined | null,
+  dates: string[],
+  bookings: Booking[]
+): { isFree: boolean; blockedDate?: string; errorMessage?: string } {
+  if (!dates || dates.length === 0) return { isFree: true };
+
+  // 1. Check if dates are continuous
+  if (!areDatesConsecutive(dates)) {
+    return {
+      isFree: false,
+      errorMessage: 'تحديد أيام الحجز لازم تكون متصلة — يمنع النظام أخذ أيام متفرقة للحجز الواحد',
+    };
+  }
+
+  // 2. Check each date in the range for confirmed bookings
+  for (const d of dates) {
+    const res = isDateBookedCrossProperty(propertyId, sectionId, d, bookings);
+    if (res.isBooked) {
+      return {
+        isFree: false,
+        blockedDate: d,
+        errorMessage: 'الحجز يتخلله أيام محجوزة',
+      };
+    }
+  }
+
+  return { isFree: true };
+}
+

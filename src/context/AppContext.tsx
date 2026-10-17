@@ -11,6 +11,7 @@ import {
   ActivityLog,
   AppNotification,
   Booking,
+  BookingService,
   CommissionRequest,
   DateOverride,
   Guard,
@@ -22,6 +23,8 @@ import {
   ToastData,
   UserAccount,
   UserRole,
+  OperatingSettings,
+  DEFAULT_OPERATING_SETTINGS,
 } from '../types';
 import { STORAGE_KEYS, StorageService } from '../lib/storage';
 import {
@@ -145,6 +148,9 @@ export interface AppContextType {
     marketerId?: string;
     commissionRatePercent?: number;
     sectionName?: string;
+    extraServices?: BookingService[];
+    discount?: number;
+    discountReason?: string;
   }) => { whatsappUrl: string; message: string };
   cancelDepositWait: (propertyId: string, dates: string[]) => void;
   confirmBookingWithReceipt: (params: {
@@ -163,7 +169,14 @@ export interface AppContextType {
     notes?: string;
     sectionId?: string;
     sectionName?: string;
+    extraServices?: BookingService[];
+    discount?: number;
+    discountReason?: string;
+    discountStatus?: 'none' | 'pending_approval' | 'approved' | 'rejected';
+    discountRequestedAmount?: number;
   }) => { booking: Booking; whatsappContractUrl: string; contractText: string };
+  requestBookingDiscount: (bookingId: string, amount: number, reason: string) => void;
+  respondToBookingDiscount: (bookingId: string, approved: boolean) => void;
 
   notifications: AppNotification[];
   filteredNotifications: AppNotification[];
@@ -184,8 +197,12 @@ export interface AppContextType {
   setBookingModalOpen: (open: boolean) => void;
   preselectedDateForBooking: string | null;
   setPreselectedDateForBooking: (date: string | null) => void;
+  preselectedDatesForBooking: string[] | null;
+  setPreselectedDatesForBooking: (dates: string[] | null) => void;
   preselectedSectionForBooking: string | null;
   setPreselectedSectionForBooking: (sectionId: string | null) => void;
+  preselectedCommissionType: 'full' | 'partial' | null;
+  setPreselectedCommissionType: (type: 'full' | 'partial' | null) => void;
 
   messageTemplates: MessageTemplates;
   updateMessageTemplates: (templates: Partial<MessageTemplates>) => void;
@@ -194,6 +211,9 @@ export interface AppContextType {
   setTemplatesModalOpen: (open: boolean) => void;
   activeTemplateTab: keyof MessageTemplates;
   openTemplatesModal: (tab?: keyof MessageTemplates) => void;
+
+  operatingSettings: OperatingSettings;
+  updateOperatingSettings: (newSettings: Partial<OperatingSettings>) => void;
 
   resetAllData: () => void;
   nowTimestamp: number;
@@ -302,9 +322,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return savedId;
   });
 
-  const [marketers, setMarketers] = useState<Marketer[]>(() =>
-    StorageService.get<Marketer[]>(STORAGE_KEYS.MARKETERS, INITIAL_MARKETERS)
-  );
+  const [marketers, setMarketers] = useState<Marketer[]>(() => {
+    const saved = StorageService.get<Marketer[]>(STORAGE_KEYS.MARKETERS, INITIAL_MARKETERS);
+    const list = [...saved];
+    INITIAL_MARKETERS.forEach((m) => {
+      if (!list.some((it) => it.id === m.id)) list.push(m);
+    });
+    return list;
+  });
 
   const [bookings, setBookings] = useState<Booking[]>(() => {
     const saved = StorageService.get<Booking[]>(STORAGE_KEYS.BOOKINGS, INITIAL_BOOKINGS);
@@ -362,6 +387,53 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     StorageService.get<Record<string, DateOverride>>(STORAGE_KEYS.OVERRIDES, {})
   );
 
+  const [operatingSettings, setOperatingSettings] = useState<OperatingSettings>(() => {
+    const saved = StorageService.get<OperatingSettings>(
+      STORAGE_KEYS.OPERATING_SETTINGS,
+      DEFAULT_OPERATING_SETTINGS
+    );
+    return {
+      ...DEFAULT_OPERATING_SETTINGS,
+      ...saved,
+      adminFees: {
+        ...DEFAULT_OPERATING_SETTINGS.adminFees,
+        ...(saved?.adminFees || {}),
+      },
+      weekendDays: saved?.weekendDays || DEFAULT_OPERATING_SETTINGS.weekendDays,
+      marketerCommissions: {
+        ...DEFAULT_OPERATING_SETTINGS.marketerCommissions,
+        ...(saved?.marketerCommissions || {}),
+      },
+      achievementBonus: {
+        ...DEFAULT_OPERATING_SETTINGS.achievementBonus,
+        ...(saved?.achievementBonus || {}),
+      },
+    };
+  });
+
+  const updateOperatingSettings = useCallback((newSettings: Partial<OperatingSettings>) => {
+    setOperatingSettings((prev) => {
+      const merged: OperatingSettings = {
+        ...prev,
+        ...newSettings,
+        adminFees: {
+          ...prev.adminFees,
+          ...(newSettings.adminFees || {}),
+        },
+        marketerCommissions: {
+          ...prev.marketerCommissions,
+          ...(newSettings.marketerCommissions || {}),
+        },
+        achievementBonus: {
+          ...prev.achievementBonus,
+          ...(newSettings.achievementBonus || {}),
+        },
+      };
+      StorageService.set(STORAGE_KEYS.OPERATING_SETTINGS, merged);
+      return merged;
+    });
+  }, []);
+
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>(() =>
     StorageService.get<ActivityLog[]>(STORAGE_KEYS.LOGS, INITIAL_LOGS)
   );
@@ -376,7 +448,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [bookingModalOpen, setBookingModalOpen] = useState(false);
   const [preselectedDateForBooking, setPreselectedDateForBooking] = useState<string | null>(null);
+  const [preselectedDatesForBooking, setPreselectedDatesForBooking] = useState<string[] | null>(null);
   const [preselectedSectionForBooking, setPreselectedSectionForBooking] = useState<string | null>(null);
+  const [preselectedCommissionType, setPreselectedCommissionType] = useState<'full' | 'partial' | null>(null);
 
   const [messageTemplates, setMessageTemplates] = useState<MessageTemplates>(() =>
     StorageService.get<MessageTemplates>(STORAGE_KEYS.TEMPLATES, INITIAL_TEMPLATES)
@@ -1422,6 +1496,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       marketerId,
       commissionRatePercent,
       sectionName,
+      extraServices,
+      discount,
+      discountReason,
     }: {
       propertyId: string;
       dates: string[];
@@ -1433,10 +1510,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       marketerId?: string;
       commissionRatePercent?: number;
       sectionName?: string;
+      extraServices?: BookingService[];
+      discount?: number;
+      discountReason?: string;
     }) => {
       const prop = properties.find((p) => p.id === propertyId) || selectedProperty;
       const displayName = sectionName ? `${prop.name} (${sectionName})` : prop.name;
-      const targetMarketer = marketers.find((m) => m.id === (marketerId || currentMarketerId));
+      const isManagement = !marketerId || marketerId === 'admin';
+      const targetMarketer = isManagement ? undefined : marketers.find((m) => m.id === marketerId);
       const expiresAt = Date.now() + 900 * 1000; // 15 minutes = 900 seconds
       const todayStr = new Date().toISOString().split('T')[0];
       const validDates = dates.filter((d) => d >= todayStr);
@@ -1455,9 +1536,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             waitingCustomerName: customerName,
             waitingCustomerPhone: customerPhone,
             waitingDepositAmount: depositAmount,
-            waitingMarketerName: targetMarketer?.name,
-            waitingMarketerId: targetMarketer?.id,
-            waitingCommissionRate: commissionRatePercent === 7 ? 7 : 5,
+            waitingMarketerName: isManagement ? 'الإدارة' : targetMarketer?.name,
+            waitingMarketerId: isManagement ? undefined : targetMarketer?.id,
+            waitingCommissionRate: isManagement ? 0 : (commissionRatePercent === 7 ? 7 : 5),
           };
         });
         return next;
@@ -1484,20 +1565,45 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         'deposit_request'
       );
 
-      const msg = fillTemplate(messageTemplates.depositRequest, {
+      const extraServicesTotal = (extraServices || []).reduce((acc, s) => acc + (Number(s.price) || 0), 0);
+      const approvedDiscount = discount || 0;
+      const calendarPrice = Math.max(0, totalPrice - approvedDiscount);
+      const clientTotal = calendarPrice + extraServicesTotal;
+      const remainingAmount = Math.max(0, clientTotal - depositAmount);
+
+      let msg = fillTemplate(messageTemplates.depositRequest, {
         اسم_العميل: customerName,
         رقم_الجوال: customerPhone,
         اسم_العقار: displayName,
         عدد_الليالي: nightsCount,
         مبلغ_العربون: depositAmount,
-        المبلغ_الإجمالي: totalPrice,
-        المبلغ_المتبقي: totalPrice - depositAmount,
+        المبلغ_الإجمالي: clientTotal,
+        المبلغ_المتبقي: remainingAmount,
         مبلغ_التأمين: prop.insuranceAmount,
         اسم_البنك: prop.bankName,
         اسم_الحساب: prop.accountHolder,
         رقم_الآيبان: prop.iban,
         مهلة_الدفع: '15 دقيقة',
       });
+
+      if (approvedDiscount > 0 || (extraServices && extraServices.length > 0)) {
+        let detailsAddon = '\n\n📋 تفاصيل الحساب والعرض:';
+        detailsAddon += `\n• سعر الوحدة / الإقامة: ${totalPrice} ر.س`;
+        if (approvedDiscount > 0) {
+          detailsAddon += `\n• خصم معتمد (${discountReason || 'إلغاء الفطور'}): -${approvedDiscount} ر.س`;
+          detailsAddon += `\n• سعر الحجز بعد الخصم: ${calendarPrice} ر.س`;
+        }
+        if (extraServices && extraServices.length > 0) {
+          detailsAddon += '\n• الخدمات الإضافية المعتمدة تلقائياً:';
+          extraServices.forEach((s) => {
+            detailsAddon += `\n  - ${s.name}: ${s.price} ر.س`;
+          });
+          detailsAddon += `\n• إجمالي الخدمات الإضافية: ${extraServicesTotal} ر.س`;
+        }
+        detailsAddon += `\n• إجمالي العميل في العرض: ${clientTotal} ر.س`;
+        detailsAddon += `\n• مبلغ التأمين المسترد المستقل: ${prop.insuranceAmount} ر.س`;
+        msg += detailsAddon;
+      }
 
       const cleanPhone = customerPhone.replace(/\D/g, '').replace(/^0/, '966');
       const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`;
@@ -1542,6 +1648,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       notes,
       sectionId,
       sectionName,
+      extraServices,
+      discount,
+      discountReason,
+      discountStatus,
+      discountRequestedAmount,
     }: {
       propertyId: string;
       dates: string[];
@@ -1558,10 +1669,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       notes?: string;
       sectionId?: string;
       sectionName?: string;
+      extraServices?: BookingService[];
+      discount?: number;
+      discountReason?: string;
+      discountStatus?: 'none' | 'pending_approval' | 'approved' | 'rejected';
+      discountRequestedAmount?: number;
     }) => {
       const prop = properties.find((p) => p.id === propertyId) || selectedProperty;
       const displayName = sectionName ? `${prop.name} (${sectionName})` : prop.name;
-      const targetMarketer = marketers.find((m) => m.id === (marketerId || currentMarketerId));
+      const isManagement = !marketerId || marketerId === 'admin';
+      const targetMarketer = isManagement ? undefined : marketers.find((m) => m.id === marketerId);
 
       const todayStr = new Date().toISOString().split('T')[0];
       const validDates = dates.filter((d) => d >= todayStr);
@@ -1574,8 +1691,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
       const nightsCount = sortedDates.length;
       const nightlyPrice = Math.round(totalPrice / Math.max(1, nightsCount));
-      const rate = commissionRatePercent === 7 ? 7 : 5;
-      const commissionAmount = targetMarketer ? Math.round(totalPrice * (rate / 100)) : 0;
+
+      // Extra services & discount rules:
+      const extraServicesTotal = (extraServices || []).reduce((acc, s) => acc + (Number(s.price) || 0), 0);
+      const isDiscountApproved = discountStatus === 'approved' || (isAdmin && (discount || 0) > 0);
+      const approvedDiscount = isDiscountApproved ? (discount || discountRequestedAmount || 0) : 0;
+      const finalDiscountStatus = isDiscountApproved
+        ? 'approved'
+        : ((discountRequestedAmount || discount || 0) > 0 ? 'pending_approval' : 'none');
+      const reqDiscountAmount = discountRequestedAmount || discount || 0;
+
+      // Calendar price and commission basis: unitPrice - approvedDiscount
+      const calendarPrice = Math.max(0, totalPrice - approvedDiscount);
+      const clientTotal = calendarPrice + extraServicesTotal;
+      const actualRemaining = Math.max(0, clientTotal - depositPaid);
+
+      const rate = isManagement ? 0 : (commissionRatePercent === 7 ? 7 : 5);
+      const commissionAmount = isManagement || !targetMarketer ? 0 : Math.round(calendarPrice * (rate / 100));
 
       const checkInDateObj = new Date(checkInDate);
       const daysAr = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
@@ -1603,15 +1735,34 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         وقت_الدخول: prop.checkInTimeText,
         تاريخ_الخروج: `${outDayName} ${outDayNum} ${outMonthName} ( ${outMonthNum} ) ${outYear} م`,
         وقت_الخروج: prop.checkOutTimeText,
-        المبلغ_الإجمالي: totalPrice,
+        المبلغ_الإجمالي: clientTotal,
         مبلغ_العربون: depositPaid,
-        المبلغ_المتبقي: remainingAmount,
+        المبلغ_المتبقي: actualRemaining,
         مبلغ_التأمين: insuranceAmount,
         شروط_العقد: termsText,
       });
 
       if (!contractText.includes('الشروط والأحكام') && !contractText.includes(termsText)) {
         contractText += `\n\n📌 الشروط والأحكام:\n${termsText}`;
+      }
+
+      if (approvedDiscount > 0 || (extraServices && extraServices.length > 0)) {
+        let detailsAddon = '\n\n📋 تفاصيل الحساب والعقد:';
+        detailsAddon += `\n• سعر الوحدة / الإقامة: ${totalPrice} ر.س`;
+        if (approvedDiscount > 0) {
+          detailsAddon += `\n• خصم معتمد (${discountReason || 'إلغاء الفطور'}): -${approvedDiscount} ر.س`;
+          detailsAddon += `\n• سعر الحجز في التقويم وأساس العمولة: ${calendarPrice} ر.س`;
+        }
+        if (extraServices && extraServices.length > 0) {
+          detailsAddon += '\n• الخدمات الإضافية المعتمدة تلقائياً (لا تدخل في التقويم أو العمولة):';
+          extraServices.forEach((s) => {
+            detailsAddon += `\n  - ${s.name}: ${s.price} ر.س`;
+          });
+          detailsAddon += `\n• إجمالي الخدمات الإضافية: ${extraServicesTotal} ر.س`;
+        }
+        detailsAddon += `\n• إجمالي العميل في العرض والعقد: ${clientTotal} ر.س`;
+        detailsAddon += `\n• مبلغ التأمين المسترد المستقل: ${insuranceAmount} ر.س`;
+        contractText = detailsAddon + '\n\n' + contractText;
       }
 
       const newBooking: Booking = {
@@ -1627,18 +1778,25 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         checkOutDate,
         nightsCount,
         nightlyPrice,
-        totalPrice,
+        totalPrice: calendarPrice,
+        calendarPrice,
+        clientTotal,
         taxAmount: 0,
-        discount: 0,
+        discount: approvedDiscount,
+        discountReason,
+        discountStatus: finalDiscountStatus,
+        discountRequestedAmount: reqDiscountAmount,
+        extraServices,
+        extraServicesTotal,
         depositPaid,
-        remainingAmount,
+        remainingAmount: actualRemaining,
         insuranceAmount,
         depositReceiptUrl: receiptDataUrl || receiptFileName,
         marketerId: targetMarketer?.id,
-        marketerName: targetMarketer?.name,
+        marketerName: isManagement ? 'الإدارة (حجز مباشر)' : targetMarketer?.name,
         marketerCommission: commissionAmount,
         commissionRatePercent: rate,
-        bookingType: rate === 7 ? 'full' : 'partial',
+        bookingType: isManagement ? 'full' : (rate === 7 ? 'full' : 'partial'),
         commissionStatus: 'pending',
         status: 'confirmed',
         createdAt: new Date().toISOString().split('T')[0],
@@ -1706,13 +1864,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           : params.checkOutDate;
 
       const prop = properties.find((p) => p.id === params.propertyId) || selectedProperty;
-      const marketerId = params.marketerId || (isAdmin ? undefined : currentMarketerId);
-      const marketerObj = marketers.find((m) => m.id === marketerId);
-      const netTotal = (params.totalPrice || prop.basePriceWeekday) - (params.discount || 0);
-      const rate = params.commissionRatePercent === 7 ? 7 : 5;
-      const commission = marketerObj ? Math.round(netTotal * (rate / 100)) : 0;
+      const isManagement = !params.marketerId || params.marketerId === 'admin';
+      const marketerObj = isManagement ? undefined : marketers.find((m) => m.id === params.marketerId);
+
+      const extraServicesTotal = (params.extraServices || []).reduce((acc, s) => acc + (Number(s.price) || 0), 0);
+      const isDiscountApproved = params.discountStatus === 'approved' || (isAdmin && (params.discount || 0) > 0);
+      const approvedDiscount = isDiscountApproved ? (params.discount || params.discountRequestedAmount || 0) : 0;
+      const finalDiscountStatus = isDiscountApproved
+        ? 'approved'
+        : ((params.discountRequestedAmount || params.discount || 0) > 0 ? 'pending_approval' : 'none');
+      const reqDiscountAmount = params.discountRequestedAmount || params.discount || 0;
+
+      const baseUnitPrice = params.nightlyPrice
+        ? params.nightlyPrice * (params.nightsCount || 1)
+        : (params.totalPrice || prop.basePriceWeekday);
+      const calendarPrice = Math.max(0, baseUnitPrice - approvedDiscount);
+      const clientTotal = calendarPrice + extraServicesTotal;
+      const rate = isManagement ? 0 : (params.commissionRatePercent === 7 ? 7 : 5);
+      const commission = isManagement || !marketerObj ? 0 : Math.round(calendarPrice * (rate / 100));
       const deposit = params.depositPaid || prop.defaultDeposit;
-      const remaining = params.remainingAmount !== undefined ? params.remainingAmount : netTotal - deposit;
+      const remaining = params.remainingAmount !== undefined ? params.remainingAmount : Math.max(0, clientTotal - deposit);
       const insurance = params.insuranceAmount || prop.insuranceAmount;
 
       const newBooking: Booking = {
@@ -1729,17 +1900,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         checkOutDate: validCheckOut,
         nightsCount: params.nightsCount || 1,
         nightlyPrice: params.nightlyPrice || prop.basePriceWeekday,
-        totalPrice: netTotal,
+        totalPrice: calendarPrice,
+        calendarPrice,
+        clientTotal,
         taxAmount: 0,
-        discount: params.discount || 0,
+        discount: approvedDiscount,
+        discountReason: params.discountReason,
+        discountStatus: finalDiscountStatus,
+        discountRequestedAmount: reqDiscountAmount,
+        extraServices: params.extraServices,
+        extraServicesTotal,
         depositPaid: deposit,
         remainingAmount: remaining,
         insuranceAmount: insurance,
         marketerId: marketerObj?.id,
-        marketerName: marketerObj?.name,
+        marketerName: isManagement ? 'الإدارة (حجز مباشر)' : marketerObj?.name,
         marketerCommission: commission,
         commissionRatePercent: rate,
-        bookingType: rate === 7 ? 'full' : 'partial',
+        bookingType: isManagement ? 'full' : (rate === 7 ? 'full' : 'partial'),
         commissionStatus: 'pending',
         status: 'confirmed',
         createdAt: new Date().toISOString().split('T')[0],
@@ -1755,19 +1933,33 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         {
           id: `notif-${Date.now()}`,
           title: `🎉 حجز جديد - ${prop.name}`,
-          description: `تم استلام حجز جديد برقم ${newBooking.bookingNumber} للعميل ${params.customerName} بقيمة ${netTotal} ر.س`,
+          description: `تم استلام حجز جديد برقم ${newBooking.bookingNumber} للعميل ${params.customerName} بقيمة ${clientTotal} ر.س (أساس التقويم: ${calendarPrice} ر.س)`,
           timestamp: 'الآن',
           read: false,
           type: 'booking',
           targetAudience: 'all',
           linkToBookingId: newBooking.id,
         },
+        ...(finalDiscountStatus === 'pending_approval'
+          ? [
+              {
+                id: `notif-${Date.now()}-disc`,
+                title: `🔔 طلب خصم جديد بانتظار الموافقة - ${prop.name}`,
+                description: `طلب خصم بقيمة ${reqDiscountAmount} ر.س للحجز ${newBooking.bookingNumber} للعميل ${params.customerName}. السبب: ${params.discountReason || 'إلغاء الفطور'}.`,
+                timestamp: 'الآن',
+                read: false,
+                type: 'system' as const,
+                targetAudience: 'admin_only' as const,
+                linkToBookingId: newBooking.id,
+              },
+            ]
+          : []),
         ...prev,
       ]);
 
       triggerBrowserNotification(
         `🎉 استلام حجز جديد - ${prop.name}`,
-        `تم استلام حجز جديد (${newBooking.bookingNumber}) للعميل ${params.customerName} بقيمة ${netTotal} ر.س ومسوق: ${marketerObj?.name || 'مباشر'}`,
+        `تم استلام حجز جديد (${newBooking.bookingNumber}) للعميل ${params.customerName} وإجمالي ${clientTotal} ر.س`,
         'booking'
       );
 
@@ -1786,6 +1978,135 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return newBooking;
     },
     [properties, selectedProperty, isAdmin, currentMarketerId, marketers, bookings.length, triggerBrowserNotification]
+  );
+
+  const requestBookingDiscount = useCallback(
+    (bookingId: string, amount: number, reason: string) => {
+      setBookings((prev) =>
+        prev.map((b) => {
+          if (b.id !== bookingId) return b;
+          return {
+            ...b,
+            discountRequestedAmount: amount,
+            discountReason: reason,
+            discountStatus: 'pending_approval',
+          };
+        })
+      );
+
+      const bk = bookings.find((b) => b.id === bookingId);
+      const notifTitle = `🔔 طلب خصم جديد بانتظار موافقة الإدارة - ${bk?.propertyName || 'عقار'}`;
+      const notifDesc = `طلب خصم بمبلغ ${amount} ر.س للحجز ${bk?.bookingNumber || ''} للعميل ${bk?.customerName || ''}. السبب: ${reason || 'إلغاء الفطور'}.`;
+
+      setNotifications((prev) => [
+        {
+          id: `notif-${Date.now()}-reqdisc`,
+          title: notifTitle,
+          description: notifDesc,
+          timestamp: 'الآن',
+          read: false,
+          type: 'system',
+          targetAudience: 'admin_only',
+          linkToBookingId: bookingId,
+        },
+        ...prev,
+      ]);
+
+      triggerBrowserNotification(notifTitle, notifDesc, 'system');
+    },
+    [bookings, triggerBrowserNotification]
+  );
+
+  const respondToBookingDiscount = useCallback(
+    (bookingId: string, approved: boolean) => {
+      let affectedBooking: Booking | null = null;
+
+      setBookings((prev) =>
+        prev.map((b) => {
+          if (b.id !== bookingId) return b;
+          if (!approved) {
+            affectedBooking = {
+              ...b,
+              discountStatus: 'rejected',
+            };
+            return affectedBooking;
+          }
+
+          // Approved!
+          const discountToApply = b.discountRequestedAmount || b.discount || 0;
+          const nights = b.nightsCount || 1;
+          const unitPrice = b.nightlyPrice ? b.nightlyPrice * nights : (b.totalPrice + (b.discount || 0));
+          const calendarPrice = Math.max(0, unitPrice - discountToApply);
+          const extraTotal = b.extraServicesTotal || (b.extraServices || []).reduce((acc, s) => acc + (Number(s.price) || 0), 0);
+          const clientTotal = calendarPrice + extraTotal;
+          const rate = b.commissionRatePercent || 0;
+          const isMgmt = !b.marketerId || b.marketerName?.includes('الإدارة');
+          const commission = isMgmt ? 0 : Math.round(calendarPrice * (rate / 100));
+          const remaining = Math.max(0, clientTotal - b.depositPaid);
+
+          affectedBooking = {
+            ...b,
+            discount: discountToApply,
+            discountStatus: 'approved',
+            calendarPrice,
+            clientTotal,
+            totalPrice: calendarPrice,
+            marketerCommission: commission,
+            remainingAmount: remaining,
+          };
+          return affectedBooking;
+        })
+      );
+
+      const bk = affectedBooking || bookings.find((b) => b.id === bookingId);
+      if (!bk) return;
+
+      if (approved) {
+        setDateOverrides((prev) => {
+          const next = { ...prev };
+          const k = `${bk.propertyId}_${bk.checkInDate}`;
+          if (next[k]) {
+            next[k] = { ...next[k], price: Math.round(bk.totalPrice / Math.max(1, bk.nightsCount)) };
+          }
+          return next;
+        });
+
+        const notifTitle = `✅ تمت الموافقة على طلب الخصم - ${bk.propertyName}`;
+        const notifDesc = `وافقت الإدارة على خصم ${bk.discount} ر.س للحجز ${bk.bookingNumber}. تم تحديث سعر الحجز في التقويم وأساس العمولة (${bk.calendarPrice} ر.س) والعقد تلقائياً.`;
+        setNotifications((prev) => [
+          {
+            id: `notif-${Date.now()}-apprdisc`,
+            title: notifTitle,
+            description: notifDesc,
+            timestamp: 'الآن',
+            read: false,
+            type: 'system',
+            targetAudience: 'all',
+            linkToBookingId: bookingId,
+          },
+          ...prev,
+        ]);
+        triggerBrowserNotification(notifTitle, notifDesc, 'system');
+      } else {
+        const notifTitle = `❌ تم رفض طلب الخصم - ${bk.propertyName}`;
+        const notifDesc = `رفضت الإدارة طلب الخصم للحجز ${bk.bookingNumber}. يستمر الحجز بسعره المعتمد دون تغيير.`;
+        setNotifications((prev) => [
+          {
+            id: `notif-${Date.now()}-rejdisc`,
+            title: notifTitle,
+            description: notifDesc,
+            timestamp: 'الآن',
+            read: false,
+            type: 'system',
+            targetAudience: 'all',
+            linkToBookingId: bookingId,
+          },
+          ...prev,
+        ]);
+        triggerBrowserNotification(notifTitle, notifDesc, 'system');
+      }
+    },
+    [bookings, triggerBrowserNotification]
   );
 
   const updateBookingStatus = useCallback((id: string, status: Booking['status']) => {
@@ -2442,6 +2763,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         requestDeposit,
         cancelDepositWait,
         confirmBookingWithReceipt,
+        requestBookingDiscount,
+        respondToBookingDiscount,
 
         notifications,
         filteredNotifications,
@@ -2462,8 +2785,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setBookingModalOpen,
         preselectedDateForBooking,
         setPreselectedDateForBooking,
+        preselectedDatesForBooking,
+        setPreselectedDatesForBooking,
         preselectedSectionForBooking,
         setPreselectedSectionForBooking,
+        preselectedCommissionType,
+        setPreselectedCommissionType,
 
         messageTemplates,
         updateMessageTemplates,
@@ -2472,6 +2799,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setTemplatesModalOpen,
         activeTemplateTab,
         openTemplatesModal,
+
+        operatingSettings,
+        updateOperatingSettings,
 
         resetAllData,
         nowTimestamp,

@@ -6,8 +6,11 @@ import {
   Percent,
   CheckCircle2,
   X,
+  Plus,
+  Sparkles,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { BookingService } from '../../types';
 import { getResolvedDatePrice } from '../../lib/pricingService';
 
 export const BookingModal: React.FC = () => {
@@ -35,11 +38,20 @@ export const BookingModal: React.FC = () => {
   const [inDate, setInDate] = useState('');
   const [outDate, setOutDate] = useState('');
   const [deposit, setDeposit] = useState<number>(250);
-  const [discount, setDiscount] = useState<number>(0);
   const [notes, setNotes] = useState('');
   const [assignedMarketerId, setAssignedMarketerId] = useState(
-    isAdmin ? marketers[0]?.id || '' : currentMarketerId
+    !isAdmin && currentMarketerId ? currentMarketerId : 'admin'
   );
+
+  // Extra services & discount request state
+  const [extraServices, setExtraServices] = useState<BookingService[]>([]);
+  const [newServiceName, setNewServiceName] = useState('');
+  const [newServicePrice, setNewServicePrice] = useState<string>('');
+  const [showAddServiceForm, setShowAddServiceForm] = useState(false);
+
+  const [hasDiscount, setHasDiscount] = useState(false);
+  const [discountAmount, setDiscountAmount] = useState<number>(0);
+  const [discountReason, setDiscountReason] = useState<string>('إلغاء الفطور');
 
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -63,8 +75,10 @@ export const BookingModal: React.FC = () => {
       if (prop?.defaultDeposit) {
         setDeposit(prop.defaultDeposit);
       }
-      if (!isAdmin) {
+      if (!isAdmin && currentMarketerId) {
         setAssignedMarketerId(currentMarketerId);
+      } else if (isAdmin) {
+        setAssignedMarketerId('admin');
       }
     }
   }, [bookingModalOpen, preselectedDateForBooking, preselectedSectionForBooking, selectedPropertyId, properties, isAdmin, currentMarketerId, todayStr]);
@@ -81,9 +95,12 @@ export const BookingModal: React.FC = () => {
     ? getResolvedDatePrice(propId, sectionId || undefined, inDate, dateOverrides, properties)
     : (selectedSection?.priceWeekday || activeProp.basePriceWeekday);
   const rawTotal = baseNightly * nights;
-  const netTotal = Math.max(0, rawTotal - discount);
-  const commissionRate = commType === 'full' ? 7 : 5;
-  const commissionAmount = Math.round(netTotal * (commissionRate / 100));
+  const extraServicesTotal = extraServices.reduce((sum, s) => sum + (Number(s.price) || 0), 0);
+  const calendarPrice = Math.max(0, rawTotal - (hasDiscount ? discountAmount : 0));
+  const clientTotal = calendarPrice + extraServicesTotal;
+  const isManagement = assignedMarketerId === 'admin' || !assignedMarketerId;
+  const commissionRate = isManagement ? 0 : (commType === 'full' ? 7 : 5);
+  const commissionAmount = isManagement ? 0 : Math.round(calendarPrice * (commissionRate / 100));
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -104,17 +121,25 @@ export const BookingModal: React.FC = () => {
       checkOutDate: outDate,
       nightsCount: nights,
       nightlyPrice: baseNightly,
-      totalPrice: netTotal,
-      discount,
+      totalPrice: calendarPrice,
+      discount: hasDiscount ? discountAmount : 0,
+      discountReason: hasDiscount ? discountReason : undefined,
+      discountStatus: isAdmin
+        ? (hasDiscount && discountAmount > 0 ? 'approved' : 'none')
+        : (hasDiscount && discountAmount > 0 ? 'pending_approval' : 'none'),
+      discountRequestedAmount: hasDiscount ? discountAmount : 0,
+      extraServices,
       depositPaid: deposit,
-      marketerId: assignedMarketerId || undefined,
-      commissionRatePercent: commissionRate,
+      marketerId: isManagement ? undefined : assignedMarketerId,
+      commissionRatePercent: isManagement ? 0 : commissionRate,
       notes,
     });
 
     setCustName('');
     setCustPhone('05');
-    setDiscount(0);
+    setExtraServices([]);
+    setHasDiscount(false);
+    setDiscountAmount(0);
     setNotes('');
     setBookingModalOpen(false);
   };
@@ -130,7 +155,7 @@ export const BookingModal: React.FC = () => {
             <div>
               <h3 className="font-bold text-base text-white">تسجيل حجز استراحة جديد</h3>
               <p className="text-xs text-purple-200">
-                يتم احتساب عمولة الموظف تلقائياً (جزئي 5% - كلي 7%) عند إتمام الحجز
+                اختيار المسوق ونوع الحجز (كلي 7% - جزئي 5%) وتضاف العمولة تلقائياً للمسوق
               </p>
             </div>
           </div>
@@ -294,15 +319,37 @@ export const BookingModal: React.FC = () => {
             </div>
           </div>
 
-          {isAdmin ? (
+          {/* اسم المسوق ونوع الحجز */}
+          <div className="bg-purple-50/60 border border-purple-200/90 rounded-2xl p-4 space-y-3.5">
+            <div className="flex items-center justify-between border-b pb-2.5 border-purple-100">
+              <span className="font-bold text-[#2E1045] text-xs sm:text-sm">اسم المسوق ونوع الحجز</span>
+              {isManagement ? (
+                <span className="text-[10px] bg-slate-200/80 text-slate-700 px-2 py-0.5 rounded-full font-bold">
+                  حجز مباشر للإدارة (0%)
+                </span>
+              ) : (
+                <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold">
+                  عمولة {commissionRate}% مستحقة
+                </span>
+              )}
+            </div>
+
+            {/* الحقل الأول: اسم المسوق (الإدارة - أسماء المسوقين) */}
             <div>
-              <label className="font-bold text-slate-700 block mb-1">تنسيب الحجز لمسوق:</label>
+              <label className="font-bold text-slate-700 block mb-1 flex items-center justify-between">
+                <span>اسم المسوق:</span>
+                {isManagement && (
+                  <span className="text-[10px] text-purple-700 font-normal">
+                    الإدارة لا تأخذ عمولة
+                  </span>
+                )}
+              </label>
               <select
                 value={assignedMarketerId}
                 onChange={(e) => setAssignedMarketerId(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-600 outline-hidden"
+                className="w-full px-3.5 py-2.5 bg-white border border-purple-200 rounded-xl focus:ring-2 focus:ring-purple-600 outline-hidden font-bold text-purple-950 cursor-pointer text-xs"
               >
-                <option value="">حجز مباشر للإدارة (بدون عمولة مسوق)</option>
+                <option value="admin">الإدارة (حجز مباشر — لا عمولة 0%)</option>
                 {marketers.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name} ({m.code})
@@ -310,40 +357,40 @@ export const BookingModal: React.FC = () => {
                 ))}
               </select>
             </div>
-          ) : (
-            <div className="p-2.5 bg-purple-50 rounded-xl border border-purple-100 flex items-center justify-between">
-              <span className="text-slate-600">المسوق المسجل:</span>
-              <span className="font-bold text-purple-950 font-mono">
-                {marketers.find((m) => m.id === currentMarketerId)?.name}
-              </span>
-            </div>
-          )}
 
-          <div>
-            <label className="font-bold text-slate-700 block mb-1">عمولة الموظف — نوع الحجز:</label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setCommType('full')}
-                className={`py-2.5 px-3 rounded-xl border font-bold transition-all cursor-pointer ${
-                  commType === 'full'
-                    ? 'bg-purple-700 border-purple-700 text-white shadow-md'
-                    : 'bg-white border-purple-200 text-purple-900 hover:bg-purple-50'
-                }`}
-              >
-                حجز كلي — 7%
-              </button>
-              <button
-                type="button"
-                onClick={() => setCommType('partial')}
-                className={`py-2.5 px-3 rounded-xl border font-bold transition-all cursor-pointer ${
-                  commType === 'partial'
-                    ? 'bg-purple-700 border-purple-700 text-white shadow-md'
-                    : 'bg-white border-purple-200 text-purple-900 hover:bg-purple-50'
-                }`}
-              >
-                حجز جزئي — 5%
-              </button>
+            {/* الحقل الثاني: نوع الحجز (حجز كلي 7% - حجز جزئي 5%) */}
+            <div>
+              <label className="font-bold text-slate-700 block mb-1">نوع الحجز:</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCommType('full')}
+                  className={`py-2 px-3 rounded-xl border font-bold transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+                    commType === 'full'
+                      ? 'bg-purple-700 border-purple-700 text-white shadow-md'
+                      : 'bg-white border-purple-200 text-purple-900 hover:bg-purple-50'
+                  }`}
+                >
+                  <span>حجز كلي — 7%</span>
+                  <span className={`text-[10px] ${commType === 'full' ? 'text-purple-200' : 'text-slate-400'}`}>
+                    {isManagement ? 'لا عمولة للإدارة' : 'عمولة 7% للمسوق'}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCommType('partial')}
+                  className={`py-2 px-3 rounded-xl border font-bold transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+                    commType === 'partial'
+                      ? 'bg-purple-700 border-purple-700 text-white shadow-md'
+                      : 'bg-white border-purple-200 text-purple-900 hover:bg-purple-50'
+                  }`}
+                >
+                  <span>حجز جزئي — 5%</span>
+                  <span className={`text-[10px] ${commType === 'partial' ? 'text-purple-200' : 'text-slate-400'}`}>
+                    {isManagement ? 'لا عمولة للإدارة' : 'عمولة 5% للمسوق'}
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -378,21 +425,234 @@ export const BookingModal: React.FC = () => {
             />
           </div>
 
-          <div className="p-4 bg-gradient-to-l from-purple-50 to-indigo-50/70 rounded-2xl border border-purple-200 space-y-2">
-            <div className="flex justify-between items-center text-slate-700">
-              <span>عدد الليالي:</span>
-              <span className="font-bold font-mono">{nights} ليالي</span>
-            </div>
-            <div className="flex justify-between items-center text-slate-700">
-              <span>الإجمالي:</span>
-              <span className="font-mono">{netTotal} ر.س</span>
-            </div>
-            <div className="flex justify-between items-center bg-white/80 p-2.5 rounded-xl border border-purple-200 text-emerald-800 font-bold">
-              <span className="flex items-center gap-1.5">
-                <Percent className="w-4 h-4 text-emerald-600" />
-                <span>عمولة المسوق المكتسبة ({commissionRate}%):</span>
+          {/* Section: خدمات حمران وطلب الخصم */}
+          <div className="rounded-2xl border-2 border-purple-200 bg-gradient-to-b from-[#FAF7FD] to-[#F5EEFD] p-3.5 space-y-3 shadow-xs">
+            <div className="flex items-center justify-between border-b pb-2 border-purple-100">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-purple-700" />
+                <h4 className="font-bold text-purple-950 text-xs">
+                  {activeProp.id === 'hamran' ? 'خدمات حمران وطلب الخصم' : `خدمات ${activeProp.name} وطلب الخصم`}
+                </h4>
+              </div>
+              <span className="text-[10px] bg-purple-100 text-purple-900 px-2 py-0.5 rounded-full font-bold">
+                تلقائي بالعقد + موافقة خصم
               </span>
-              <span className="text-sm font-mono text-emerald-700">{commissionAmount} ر.س</span>
+            </div>
+
+            {/* 1. إضافة خدمة */}
+            <div className="space-y-2 bg-white p-3 rounded-xl border border-purple-100">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-800 flex items-center gap-1">
+                  <Plus className="w-3.5 h-3.5 text-purple-700" />
+                  <span>إضافة خدمة إضافية (مساج، تنسيق الغرفة...)</span>
+                </span>
+                <span className="text-[10px] bg-emerald-50 text-emerald-800 font-bold px-2 py-0.2 rounded-md border border-emerald-200">
+                  دون موافقة الإدارة ✓
+                </span>
+              </div>
+
+              <p className="text-[10px] text-slate-500 leading-relaxed">
+                تُضاف الخدمة إلى عرض العميل والعقد تلقائيًا، دون موافقة الإدارة. مبلغها لا يدخل في التقويم أو العمولة.
+              </p>
+
+              {/* Quick suggestions */}
+              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                {[
+                  { name: 'مساج', price: 200 },
+                  { name: 'تنسيق الغرفة', price: 150 },
+                  { name: 'بوفيه إضافي', price: 300 },
+                ].map((preset, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      const newSvc: BookingService = {
+                        id: `svc-${Date.now()}-${idx}`,
+                        name: preset.name,
+                        price: preset.price,
+                      };
+                      setExtraServices((prev) => [...prev, newSvc]);
+                    }}
+                    className="text-[10px] bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 font-bold px-2 py-0.5 rounded-lg cursor-pointer"
+                  >
+                    + {preset.name} ({preset.price} ر.س)
+                  </button>
+                ))}
+              </div>
+
+              {extraServices.length > 0 && (
+                <div className="space-y-1 pt-1">
+                  {extraServices.map((svc) => (
+                    <div key={svc.id} className="flex justify-between items-center p-1.5 bg-purple-50 rounded-lg text-xs">
+                      <span>• {svc.name}</span>
+                      <div className="flex items-center gap-2">
+                        <strong className="font-mono text-purple-950">+{svc.price} ر.س</strong>
+                        <button
+                          type="button"
+                          onClick={() => setExtraServices((prev) => prev.filter((s) => s.id !== svc.id))}
+                          className="text-rose-600 hover:text-rose-800 font-bold"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="flex justify-between text-[11px] pt-1 font-bold text-purple-900">
+                    <span>إجمالي الخدمات:</span>
+                    <span className="font-mono">+{extraServicesTotal} ر.س</span>
+                  </div>
+                </div>
+              )}
+
+              {showAddServiceForm ? (
+                <div className="p-2.5 bg-purple-50/50 rounded-xl border border-purple-200 space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={newServiceName}
+                      onChange={(e) => setNewServiceName(e.target.value)}
+                      placeholder="اسم الخدمة (مثل مساج)"
+                      className="bg-white border border-purple-200 rounded-lg px-2 py-1 text-xs"
+                    />
+                    <input
+                      type="number"
+                      value={newServicePrice}
+                      onChange={(e) => setNewServicePrice(e.target.value)}
+                      placeholder="المبلغ (ر.س)"
+                      className="bg-white border border-purple-200 rounded-lg px-2 py-1 text-xs font-mono"
+                    />
+                  </div>
+                  <div className="flex justify-end gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddServiceForm(false)}
+                      className="px-2 py-1 text-slate-500 text-xs"
+                    >
+                      إلغاء
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!newServiceName.trim()) return;
+                        setExtraServices((prev) => [
+                          ...prev,
+                          { id: `svc-${Date.now()}`, name: newServiceName.trim(), price: Number(newServicePrice) || 0 },
+                        ]);
+                        setNewServiceName('');
+                        setNewServicePrice('');
+                        setShowAddServiceForm(false);
+                      }}
+                      className="px-3 py-1 bg-purple-700 text-white rounded-lg text-xs font-bold"
+                    >
+                      إضافة
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowAddServiceForm(true)}
+                  className="w-full py-1.5 text-xs text-purple-800 font-bold bg-purple-50 hover:bg-purple-100 rounded-lg border border-dashed border-purple-200 flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{extraServices.length > 0 ? '+ إضافة خدمة أخرى' : '+ إضافة خدمة'}</span>
+                </button>
+              )}
+            </div>
+
+            {/* 2. طلب الخصم */}
+            <div className="space-y-2 bg-white p-3 rounded-xl border border-purple-100">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-800 flex items-center gap-1">
+                  <Percent className="w-3.5 h-3.5 text-amber-600" />
+                  <span>طلب خصم (إلغاء الفطور مثلاً)</span>
+                </span>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={hasDiscount}
+                    onChange={(e) => {
+                      setHasDiscount(e.target.checked);
+                      if (!e.target.checked) setDiscountAmount(0);
+                      else if (discountAmount === 0) setDiscountAmount(100);
+                    }}
+                    className="sr-only peer"
+                  />
+                  <div className="w-8 h-4 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-purple-700" />
+                </label>
+              </div>
+
+              {hasDiscount && (
+                <div className="p-2.5 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-700 block mb-0.5">مبلغ الخصم (ر.س):</label>
+                      <input
+                        type="number"
+                        value={discountAmount}
+                        onChange={(e) => setDiscountAmount(Math.max(0, Number(e.target.value)))}
+                        className="w-full bg-white border border-amber-300 rounded-lg px-2 py-1 text-xs font-mono font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-700 block mb-0.5">سبب الخصم:</label>
+                      <input
+                        type="text"
+                        value={discountReason}
+                        onChange={(e) => setDiscountReason(e.target.value)}
+                        placeholder="مثل: إلغاء الفطور"
+                        className="w-full bg-white border border-amber-300 rounded-lg px-2 py-1 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-amber-900 leading-tight">
+                    {isAdmin
+                      ? '✓ بصفتك إدارة: يطبق الخصم مباشرة ويتحدث سعر التقويم والعمولة.'
+                      : '⏳ سيُرسل تنبيه للإدارة للموافقة، وبعد الموافقة يتحدث سعر التقويم والعقد وتُحسب العمولة على السعر بعد الخصم.'}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* 3. ملخص الحسبة الدقيقة */}
+            <div className="bg-[#2E1045] text-white p-3 rounded-xl space-y-2 text-xs">
+              <div className="grid grid-cols-2 gap-2 text-center text-[11px]">
+                <div className="bg-white/10 p-2 rounded-lg">
+                  <span className="text-[10px] text-purple-300 block">سعر الوحدة ({nights} ليالٍ)</span>
+                  <span className="font-mono font-bold">{rawTotal} ر.س</span>
+                </div>
+                <div className="bg-white/10 p-2 rounded-lg">
+                  <span className="text-[10px] text-amber-300 block">الخصم {hasDiscount ? `(${discountReason})` : ''}</span>
+                  <span className="font-mono font-bold text-amber-300">
+                    {hasDiscount && discountAmount > 0 ? `-${discountAmount}` : '0'} ر.س
+                  </span>
+                </div>
+                <div className="bg-emerald-500/20 p-2 rounded-lg col-span-2 flex items-center justify-between px-3">
+                  <span className="text-[11px] text-emerald-200">✅ سعر الحجز بالتقويم وأساس العمولة:</span>
+                  <strong className="font-mono text-emerald-300 text-sm">{calendarPrice} ر.س</strong>
+                </div>
+                <div className="bg-white/10 p-2 rounded-lg col-span-2 flex items-center justify-between px-3">
+                  <span className="text-[11px] text-purple-200">الخدمات الإضافية (مثل مساج):</span>
+                  <strong className="font-mono text-purple-100">+{extraServicesTotal} ر.س</strong>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-purple-800 flex items-center justify-between text-xs">
+                <span className="text-purple-300">✅ إجمالي العميل في العرض والعقد:</span>
+                <strong className="font-mono text-amber-300 text-base font-black">{clientTotal} ر.س</strong>
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-purple-200 pt-1">
+                <span>
+                  عمولة المسوق ({isManagement ? 'إدارة' : `${commissionRate}%`}):{' '}
+                  <strong className="font-mono text-emerald-300">
+                    {isManagement ? '0 ر.س (إدارة)' : `${commissionAmount} ر.س`}
+                  </strong>
+                </span>
+                <span>
+                  التأمين المستقل: <strong className="font-mono text-amber-200">{activeProp.insuranceAmount || 300} ر.س</strong>
+                </span>
+              </div>
             </div>
           </div>
 

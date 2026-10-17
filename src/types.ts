@@ -144,6 +144,12 @@ export interface UserAccount {
 export type BookingStatus = 'pending' | 'waiting_deposit' | 'pending_payment' | 'confirmed' | 'completed' | 'cancelled';
 export type CommissionStatus = 'pending' | 'ready_for_payout' | 'paid';
 
+export interface BookingService {
+  id: string;
+  name: string;
+  price: number;
+}
+
 export interface Booking {
   id: string;
   bookingNumber: string;
@@ -161,6 +167,13 @@ export interface Booking {
   totalPrice: number;
   taxAmount: number;
   discount: number;
+  extraServices?: BookingService[];
+  extraServicesTotal?: number;
+  discountReason?: string;
+  discountStatus?: 'none' | 'pending_approval' | 'approved' | 'rejected';
+  discountRequestedAmount?: number;
+  calendarPrice?: number;
+  clientTotal?: number;
   depositPaid: number;
   remainingAmount: number;
   insuranceAmount: number;
@@ -196,6 +209,14 @@ export interface DateOverride {
   status?: 'available' | 'booked' | 'blocked' | 'waiting_deposit';
   price?: number;
   season?: string;
+  seasonPeriod?: 'auto' | 'weekday' | 'weekend' | 'extended_holiday' | 'eid_summer';
+  note?: string;
+  adminFeePercent?: number;
+  adminFeeAmount?: number;
+  marketerCommissionPercent?: number;
+  marketerCommissionAmount?: number;
+  unitNetPrice?: number;
+  umSeifCommission?: number;
   bookingId?: string;
   waitingDepositExpiresAt?: number;
   waitingCustomerName?: string;
@@ -259,3 +280,47 @@ export interface ToastData {
   body: string;
   type: 'booking' | 'deposit_confirmed' | 'deposit_request' | 'commission' | 'permission' | 'checkout' | 'insurance' | 'system';
 }
+
+export interface OperatingSettings {
+  adminFees: {
+    weekday: number; // وسط الأسبوع
+    weekend: number; // الويكند
+    extendedHoliday: number; // الإجازات المطولة
+    eidSummer: number; // الأعياد والإجازة الصيفية
+  };
+  weekendDays: number[]; // 0: Sunday, 1: Monday, 2: Tuesday, 3: Wednesday, 4: Thursday, 5: Friday, 6: Saturday
+  adminFeeRecipient: string; // 'ام سيف'
+  adminFeeRecipientId?: string; // 'm-um-seif'
+  marketerCommissions: {
+    partial: number; // جزئي بدون متابعة (5%)
+    full: number; // كامل مع متابعة (7%)
+  };
+  achievementBonus: {
+    enabled: boolean; // تفعيل استحقاق مكافأة الإنجاز
+    monthlyTarget: number; // الهدف الشهري من الحجوزات (15)
+    bonusRate: number; // نسبة المكافأة % (10%)
+    calculationBase: 'commissions' | 'bookings_total'; // أساس احتساب المكافأة: مجموع عمولات المسوقة
+  };
+}
+
+export const DEFAULT_OPERATING_SETTINGS: OperatingSettings = {
+  adminFees: {
+    weekday: 50,
+    weekend: 100,
+    extendedHoliday: 150,
+    eidSummer: 200,
+  },
+  weekendDays: [4, 5], // Thursday (4) & Friday (5) as in screenshot
+  adminFeeRecipient: 'ام سيف',
+  adminFeeRecipientId: 'm-um-seif',
+  marketerCommissions: {
+    partial: 5,
+    full: 7,
+  },
+  achievementBonus: {
+    enabled: false,
+    monthlyTarget: 15,
+    bonusRate: 10,
+    calculationBase: 'commissions',
+  },
+};

@@ -17,6 +17,11 @@ import {
   Plus,
   Layers,
   AlertTriangle,
+  Pencil,
+  Award,
+  ShieldCheck,
+  Eye,
+  RotateCcw,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Property } from '../../types';
@@ -24,9 +29,13 @@ import {
   getResolvedDatePrice,
   isDateBookedCrossProperty,
   isDateBlockedCrossProperty,
+  getConsecutiveDatesRange,
+  areDatesConsecutive,
+  checkBookingRangeAvailability,
 } from '../../lib/pricingService';
 import { AddPropertyModal } from '../modals/AddPropertyModal';
 import { AddUnitModal } from '../modals/AddUnitModal';
+import { AdminPricingModal } from '../modals/AdminPricingModal';
 
 export const CalendarTab: React.FC = () => {
   const {
@@ -40,10 +49,17 @@ export const CalendarTab: React.FC = () => {
     applySeasonalPricingPattern,
     togglePropertyPublished,
     setActiveTab,
+    setBookingModalOpen,
     setPreselectedDateForBooking,
+    setPreselectedDatesForBooking,
     setPreselectedSectionForBooking,
+    setPreselectedCommissionType,
     nowTimestamp,
     triggerBrowserNotification,
+    isAdmin,
+    userRole,
+    currentMarketer,
+    operatingSettings,
   } = useApp();
 
   const todayStr = useMemo(() => {
@@ -57,6 +73,10 @@ export const CalendarTab: React.FC = () => {
   const [activeSectionId, setActiveSectionId] = useState<string>('all');
   const [isAddPropertyModalOpen, setIsAddPropertyModalOpen] = useState(false);
   const [isAddUnitModalOpen, setIsAddUnitModalOpen] = useState(false);
+  const [isAdminPricingModalOpen, setIsAdminPricingModalOpen] = useState(false);
+  const [previewAsMarketer, setPreviewAsMarketer] = useState(false);
+  const [pricingViewTab, setPricingViewTab] = useState<'partial' | 'full' | 'um_seif'>('full');
+  const [showNightDetails, setShowNightDetails] = useState<boolean>(false);
   const [selectMode, setSelectMode] = useState<'range' | 'multi'>('range');
   const [selectedDates, setSelectedDates] = useState<string[]>(() => {
     const now = new Date();
@@ -239,12 +259,19 @@ export const CalendarTab: React.FC = () => {
       const dayPadded = String(d).padStart(2, '0');
       const dateKey = `${year}-${monthPadded}-${dayPadded}`;
       const dayDate = new Date(year, month, d);
-      const isWeekend = dayDate.getDay() === 4 || dayDate.getDay() === 5; // Thursday & Friday
+      const isWeekend = (operatingSettings?.weekendDays || [4, 5]).includes(dayDate.getDay());
       const unitKey = activeSection
         ? `${selectedPropertyId}_${activeSection.id}_${dateKey}`
         : `${selectedPropertyId}_${dateKey}`;
       const override = dateOverrides[unitKey] || dateOverrides[`${selectedPropertyId}_${dateKey}`];
-      const price = getResolvedDatePrice(selectedPropertyId, activeSection?.id, dateKey, dateOverrides, properties);
+      const price = getResolvedDatePrice(
+        selectedPropertyId,
+        activeSection?.id,
+        dateKey,
+        dateOverrides,
+        properties,
+        operatingSettings?.weekendDays
+      );
 
       const { isBooked: crossBooked, matchedBooking } = isDateBookedCrossProperty(
         selectedPropertyId,
@@ -298,57 +325,81 @@ export const CalendarTab: React.FC = () => {
   }, [year, month, selectedPropertyId, selectedProperty, activeSection, bookings, dateOverrides, nowTimestamp, todayStr]);
 
   const handleDateClick = (dateKey: string) => {
-    // Strictly disable past dates: non-clickable and cannot be selected
-    if (dateKey < todayStr) {
-      return;
-    }
+    // 1. Strictly disable past dates
+    if (dateKey < todayStr) return;
 
-    // Strictly prevent double-booking on confirmed/booked days
+    // 2. Strictly prevent booking on confirmed red booked days (Rule 1)
     if (isDateBooked(dateKey)) {
-      showBlockedAlert('اليوم محجوز ومؤكد ولا يمكن تكرار الحجز');
+      showBlockedAlert('اليوم محجوز ومؤكد باللون الأحمر — لا يمكن أخذ حجز عليه');
       return;
     }
 
-    if (selectMode === 'multi') {
-      if (selectedDates.includes(dateKey)) {
-        if (selectedDates.length > 1) {
-          setSelectedDates(selectedDates.filter((d) => d !== dateKey));
-        }
-      } else {
-        setSelectedDates([...selectedDates, dateKey].sort());
-      }
-    } else {
-      // Range mode
-      if (selectedDates.length === 0 || selectedDates.length >= 2) {
-        setSelectedDates([dateKey]);
-      } else {
-        const start = selectedDates[0];
-        if (dateKey >= start) {
-          const list: string[] = [];
-          const curr = new Date(start);
-          const end = new Date(dateKey);
-          let foundBooked = false;
-          while (curr <= end) {
-            const dStr = curr.toISOString().split('T')[0];
-            if (isDateBooked(dStr)) {
-              foundBooked = true;
-              break;
-            }
-            if (dStr >= todayStr) {
-              list.push(dStr);
-            }
-            curr.setDate(curr.getDate() + 1);
-          }
-          if (foundBooked) {
-            showBlockedAlert('اليوم محجوز ومؤكد ولا يمكن تكرار الحجز');
-            return;
-          }
-          setSelectedDates(list.length > 0 ? list : [dateKey]);
-        } else {
-          setSelectedDates([dateKey]);
-        }
-      }
+    // 3. Consecutive range selection (Rule 2 & 3)
+    if (selectedDates.length === 0) {
+      setSelectedDates([dateKey]);
+      return;
     }
+
+    if (selectedDates.length === 1) {
+      const start = selectedDates[0];
+      if (dateKey === start) {
+        return;
+      }
+      // Propose range from start to dateKey
+      const proposedRange = getConsecutiveDatesRange(start, dateKey);
+      const check = checkBookingRangeAvailability(selectedPropertyId, activeSection?.id, proposedRange, bookings);
+      if (!check.isFree) {
+        showBlockedAlert(check.errorMessage || 'الحجز يتخلله أيام محجوزة');
+        return;
+      }
+      setSelectedDates(proposedRange);
+      return;
+    }
+
+    // Range already has 2 or more dates
+    const start = selectedDates[0];
+    const end = selectedDates[selectedDates.length - 1];
+
+    if (dateKey === end) {
+      // Shorten by 1 day from the end
+      setSelectedDates(selectedDates.slice(0, -1));
+      return;
+    }
+
+    if (dateKey === start) {
+      // Shorten by 1 day from the start
+      setSelectedDates(selectedDates.slice(1));
+      return;
+    }
+
+    if (dateKey > end) {
+      // Extending range forward
+      const proposedRange = getConsecutiveDatesRange(start, dateKey);
+      const check = checkBookingRangeAvailability(selectedPropertyId, activeSection?.id, proposedRange, bookings);
+      if (!check.isFree) {
+        showBlockedAlert(check.errorMessage || 'الحجز يتخلله أيام محجوزة');
+        return;
+      }
+      setSelectedDates(proposedRange);
+      return;
+    }
+
+    if (dateKey < start) {
+      // Extending backward or starting fresh
+      const proposedRange = getConsecutiveDatesRange(dateKey, end);
+      const check = checkBookingRangeAvailability(selectedPropertyId, activeSection?.id, proposedRange, bookings);
+      if (check.isFree) {
+        setSelectedDates(proposedRange);
+      } else {
+        // If extending backward crosses booked days, start fresh at clicked dateKey
+        setSelectedDates([dateKey]);
+      }
+      return;
+    }
+
+    // Date is inside existing range: cut range to dateKey
+    const proposedRange = getConsecutiveDatesRange(start, dateKey);
+    setSelectedDates(proposedRange);
   };
 
   const sortedSelected = useMemo(() => [...selectedDates].sort(), [selectedDates]);
@@ -362,6 +413,13 @@ export const CalendarTab: React.FC = () => {
   }, [lastSelectedDate]);
 
   const totalNights = Math.max(1, selectedDates.length);
+  const selectedNightsCount = Math.max(1, selectedDates.length);
+  const nightsLabel =
+    selectedNightsCount === 1
+      ? 'ليلة واحدة محددة'
+      : selectedNightsCount === 2
+      ? 'ليلتان محددتان'
+      : `${selectedNightsCount} ليالٍ محددة`;
 
   const estimatedTotal = useMemo(() => {
     let sum = 0;
@@ -374,7 +432,7 @@ export const CalendarTab: React.FC = () => {
         sum += ov.price;
       } else {
         const dateObj = new Date(d);
-        const isWk = dateObj.getDay() === 4 || dateObj.getDay() === 5;
+        const isWk = (operatingSettings?.weekendDays || [4, 5]).includes(dateObj.getDay());
         const bp = activeSection
           ? (isWk ? activeSection.priceWeekend : activeSection.priceWeekday)
           : (isWk ? selectedProperty.basePriceWeekend : selectedProperty.basePriceWeekday);
@@ -382,9 +440,188 @@ export const CalendarTab: React.FC = () => {
       }
     });
     return sum;
-  }, [sortedSelected, dateOverrides, selectedPropertyId, selectedProperty, activeSection]);
+  }, [sortedSelected, dateOverrides, selectedPropertyId, selectedProperty, activeSection, operatingSettings]);
 
-  const estimatedCommission = Math.round(estimatedTotal * 0.05);
+  const estimatedCommission = Math.round(
+    estimatedTotal * ((operatingSettings?.marketerCommissions?.partial ?? 5) / 100)
+  );
+
+  const currentFirstDateKey = sortedSelected[0] || todayStr;
+  const currentUnitKey = activeSection
+    ? `${selectedPropertyId}_${activeSection.id}_${currentFirstDateKey}`
+    : `${selectedPropertyId}_${currentFirstDateKey}`;
+  const currentDateOverride = dateOverrides[currentUnitKey] || dateOverrides[`${selectedPropertyId}_${currentFirstDateKey}`];
+
+  const currentNightlyPrice = useMemo(() => {
+    if (currentDateOverride?.price !== undefined) {
+      return currentDateOverride.price;
+    }
+    const dateObj = new Date(currentFirstDateKey);
+    const isWk = (operatingSettings?.weekendDays || [4, 5]).includes(dateObj.getDay());
+    return activeSection
+      ? (isWk ? activeSection.priceWeekend : activeSection.priceWeekday)
+      : (isWk ? selectedProperty.basePriceWeekend : selectedProperty.basePriceWeekday);
+  }, [currentDateOverride, currentFirstDateKey, activeSection, selectedProperty, operatingSettings]);
+
+  const marketerCommissionRate = currentMarketer?.commissionRate
+    ? Math.round(currentMarketer.commissionRate * 100)
+    : (operatingSettings?.marketerCommissions?.partial ?? 5);
+  const marketerNightlyCommission = Math.round(currentNightlyPrice * (marketerCommissionRate / 100));
+  const marketerTotalCommission = Math.round(estimatedTotal * (marketerCommissionRate / 100));
+
+  const getSeasonPeriodLabel = (period?: string) => {
+    switch (period) {
+      case 'weekend':
+        return 'ويكند';
+      case 'extended_holiday':
+        return 'إجازة مطولة';
+      case 'eid_summer':
+        return 'عيد / إجازة صيفية';
+      case 'auto':
+        return 'بحسب أيام الأسبوع';
+      case 'weekday':
+      default:
+        return 'وسط الأسبوع';
+    }
+  };
+
+  const formatArabicCurrency = (amount: number, withDecimals: boolean = true) => {
+    return (
+      amount.toLocaleString('ar-SA', {
+        minimumFractionDigits: withDecimals ? 2 : 0,
+        maximumFractionDigits: withDecimals ? 2 : 0,
+      }) + ' ر.س.'
+    );
+  };
+
+  const partialCommRate = operatingSettings?.marketerCommissions?.partial ?? 5;
+  const fullCommRate = operatingSettings?.marketerCommissions?.full ?? 7;
+  const partialCommTotal = Math.round(estimatedTotal * (partialCommRate / 100));
+  const fullCommTotal = Math.round(estimatedTotal * (fullCommRate / 100));
+  const avgNightlyPrice = Math.round(estimatedTotal / Math.max(1, selectedDates.length));
+
+  const totalAdminFees = useMemo(() => {
+    let sum = 0;
+    const fees = operatingSettings?.adminFees || {
+      weekday: 50,
+      weekend: 100,
+      extendedHoliday: 150,
+      eidSummer: 200,
+    };
+    const weekendDays = operatingSettings?.weekendDays || [4, 5];
+    sortedSelected.forEach((d) => {
+      const unitKey = activeSection
+        ? `${selectedPropertyId}_${activeSection.id}_${d}`
+        : `${selectedPropertyId}_${d}`;
+      const ov = dateOverrides[unitKey] || dateOverrides[`${selectedPropertyId}_${d}`];
+      if (ov?.adminFeeAmount !== undefined) {
+        sum += ov.adminFeeAmount;
+      } else if (ov?.seasonPeriod === 'weekend') {
+        sum += fees.weekend;
+      } else if (ov?.seasonPeriod === 'extended_holiday') {
+        sum += fees.extendedHoliday;
+      } else if (ov?.seasonPeriod === 'eid_summer') {
+        sum += fees.eidSummer;
+      } else if (ov?.seasonPeriod === 'weekday') {
+        sum += fees.weekday;
+      } else {
+        const dateObj = new Date(d);
+        sum += weekendDays.includes(dateObj.getDay()) ? fees.weekend : fees.weekday;
+      }
+    });
+    return sum;
+  }, [sortedSelected, dateOverrides, selectedPropertyId, activeSection, operatingSettings]);
+
+  const ownerNetProfitFull = estimatedTotal - fullCommTotal - totalAdminFees;
+  const ownerNetProfitPartial = estimatedTotal - partialCommTotal - totalAdminFees;
+
+  const currentUnitNetPerNight = currentDateOverride?.unitNetPrice !== undefined ? currentDateOverride.unitNetPrice : 200;
+  const totalUnitNet = currentUnitNetPerNight * Math.max(1, selectedDates.length);
+  const umSeifNetCommissionTotal = Math.max(0, estimatedTotal - totalUnitNet);
+  const umSeifTotalDues = umSeifNetCommissionTotal + totalAdminFees;
+
+  const nightDetailsList = useMemo(() => {
+    const fees = operatingSettings?.adminFees || {
+      weekday: 50,
+      weekend: 100,
+      extendedHoliday: 150,
+      eidSummer: 200,
+    };
+    const weekendDays = operatingSettings?.weekendDays || [4, 5];
+    const activeRate = pricingViewTab === 'full' ? fullCommRate : partialCommRate;
+
+    return sortedSelected.map((d) => {
+      const unitKey = activeSection
+        ? `${selectedPropertyId}_${activeSection.id}_${d}`
+        : `${selectedPropertyId}_${d}`;
+      const ov = dateOverrides[unitKey] || dateOverrides[`${selectedPropertyId}_${d}`];
+      let price = ov?.price;
+      if (price === undefined) {
+        const dateObj = new Date(d);
+        const isWk = weekendDays.includes(dateObj.getDay());
+        price = activeSection
+          ? (isWk ? activeSection.priceWeekend : activeSection.priceWeekday)
+          : (isWk ? selectedProperty.basePriceWeekend : selectedProperty.basePriceWeekday);
+      }
+      let fee = ov?.adminFeeAmount;
+      if (fee === undefined) {
+        if (ov?.seasonPeriod === 'weekend') fee = fees.weekend;
+        else if (ov?.seasonPeriod === 'extended_holiday') fee = fees.extendedHoliday;
+        else if (ov?.seasonPeriod === 'eid_summer') fee = fees.eidSummer;
+        else if (ov?.seasonPeriod === 'weekday') fee = fees.weekday;
+        else {
+          const dateObj = new Date(d);
+          fee = weekendDays.includes(dateObj.getDay()) ? fees.weekend : fees.weekday;
+        }
+      }
+      const comm = Math.round(price * (activeRate / 100));
+      const net = price - comm - fee;
+      return {
+        date: d,
+        price,
+        comm,
+        fee,
+        net,
+      };
+    });
+  }, [sortedSelected, dateOverrides, selectedPropertyId, activeSection, selectedProperty, operatingSettings, pricingViewTab, fullCommRate, partialCommRate]);
+
+  const handleSaveAdminPricing = (pricingData: {
+    price: number;
+    seasonPeriod: 'auto' | 'weekday' | 'weekend' | 'extended_holiday' | 'eid_summer';
+    adminFeePercent: number;
+    adminFeeAmount: number;
+    marketerCommissionPercent: number;
+    marketerCommissionAmount: number;
+    unitNetPrice: number;
+    umSeifCommission: number;
+    note?: string;
+  }) => {
+    const validDates = selectedDates.filter((d) => d >= todayStr);
+    if (validDates.length === 0) return;
+    setDateOverridesBulk(
+      selectedPropertyId,
+      validDates,
+      {
+        price: pricingData.price,
+        seasonPeriod: pricingData.seasonPeriod,
+        adminFeePercent: pricingData.adminFeePercent,
+        adminFeeAmount: pricingData.adminFeeAmount,
+        marketerCommissionPercent: pricingData.marketerCommissionPercent,
+        marketerCommissionAmount: pricingData.marketerCommissionAmount,
+        unitNetPrice: pricingData.unitNetPrice,
+        umSeifCommission: pricingData.umSeifCommission,
+        note: pricingData.note,
+      },
+      activeSectionId
+    );
+    setPriceInput(pricingData.price);
+    triggerBrowserNotification(
+      '✓ تم حفظ وتطبيق التسعيرة',
+      `تم تحديد السعر ${pricingData.price} ر.س وعمولة أم سيف ${pricingData.umSeifCommission} ر.س لـ ${validDates.length} ليلة`,
+      'commission'
+    );
+  };
 
   const handleApplyStatus = (status: 'available' | 'blocked') => {
     const validDates = selectedDates.filter((d) => d >= todayStr);
@@ -679,24 +916,23 @@ export const CalendarTab: React.FC = () => {
         </div>
       )}
 
-      {/* Selection Mode Switcher */}
-      <div className="bg-white rounded-2xl p-1.5 shadow-xs border border-purple-100 grid grid-cols-2 gap-1.5">
-        <button
-          onClick={() => setSelectMode('range')}
-          className={`py-2 rounded-xl text-xs font-bold transition-all text-center cursor-pointer ${
-            selectMode === 'range' ? 'bg-purple-700 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-50'
-          }`}
-        >
-          دخول ومغادرة (فترة متصلة)
-        </button>
-        <button
-          onClick={() => setSelectMode('multi')}
-          className={`py-2 rounded-xl text-xs font-bold transition-all text-center cursor-pointer ${
-            selectMode === 'multi' ? 'bg-purple-700 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-50'
-          }`}
-        >
-          ليالٍ منفصلة (تحديد متعدد)
-        </button>
+      {/* Selection Mode Notice: Consecutive Dates Strictly Enforced */}
+      <div className="bg-white rounded-2xl p-2.5 shadow-xs border border-purple-100 flex items-center justify-between gap-2 text-xs">
+        <div className="flex items-center gap-2 text-[#2E1045] font-bold">
+          <CalendarDays className="w-4 h-4 text-purple-700 shrink-0" />
+          <span>
+            نظام حجز الفترات المتصلة (تحديد موعد الدخول والمغادرة) — الأيام متصلة حصراً ويمنع النظام أخذ أيام متفرقة للحجز الواحد.
+          </span>
+        </div>
+        {selectedDates.length > 1 && (
+          <button
+            type="button"
+            onClick={() => setSelectedDates([selectedDates[0] || todayStr])}
+            className="text-[11px] font-bold text-purple-700 hover:text-purple-900 bg-purple-50 px-2.5 py-1 rounded-xl shrink-0 cursor-pointer border border-purple-200"
+          >
+            إعادة تعيين لليلة واحدة
+          </button>
+        )}
       </div>
 
       {/* Calendar Card */}
@@ -819,9 +1055,9 @@ export const CalendarTab: React.FC = () => {
             } else if (status === 'waiting_deposit') {
               colorClasses = 'bg-amber-100 border-amber-300 text-amber-950 btn-beam-shine';
               label = `انتظار (${Math.floor(depositRemainingSeconds / 60)}:${String(depositRemainingSeconds % 60).padStart(2, '0')})`;
-            } else if (status === 'booked') {
-              colorClasses = 'bg-[#FCE7F3] border-pink-300 text-pink-950 hover:border-pink-400';
-              label = 'مؤكد';
+            } else if (status === 'booked' || isConfirmedBooked) {
+              colorClasses = 'bg-[#FEE2E2] border-2 border-rose-500 text-rose-950 font-black shadow-xs hover:border-rose-600';
+              label = 'محجوز مؤكد';
             } else if (status === 'blocked') {
               colorClasses = 'bg-slate-100 border-slate-200 text-slate-400';
               label = 'مغلق';
@@ -843,13 +1079,13 @@ export const CalendarTab: React.FC = () => {
                 onClick={() => {
                   if (isPast) return;
                   if (isConfirmedBooked) {
-                    showBlockedAlert('اليوم محجوز ومؤكد ولا يمكن تكرار الحجز');
+                    showBlockedAlert('اليوم محجوز ومؤكد باللون الأحمر — لا يمكن أخذ حجز عليه');
                     return;
                   }
                   handleDateClick(dateKey);
                 }}
                 aria-disabled={isPast || isConfirmedBooked}
-                title={isConfirmedBooked ? 'اليوم محجوز ومؤكد ولا يمكن تكرار الحجز' : undefined}
+                title={isConfirmedBooked ? 'اليوم محجوز ومؤكد باللون الأحمر — لا يمكن أخذ حجز عليه' : undefined}
                 className={`${heightCls} rounded-2xl border p-1 sm:p-1.5 flex flex-col justify-between items-center transition-all relative select-none ${colorClasses} ${todayClasses} ${selectedClasses} ${
                   isPast
                     ? 'cursor-not-allowed pointer-events-none'
@@ -859,8 +1095,8 @@ export const CalendarTab: React.FC = () => {
                 }`}
               >
                 {/* Booked Locked Badge */}
-                {status === 'booked' && !isToday && (
-                  <span className="bg-pink-200/90 text-pink-950 text-[7px] sm:text-[8px] font-extrabold px-1 rounded-xs -mt-0.5">
+                {(status === 'booked' || isConfirmedBooked) && !isToday && (
+                  <span className="bg-rose-600 text-white text-[7.5px] sm:text-[8.5px] font-black px-1.5 py-0.5 rounded-md shadow-xs -mt-0.5 flex items-center gap-0.5">
                     🔒 مؤكد
                   </span>
                 )}
@@ -904,8 +1140,8 @@ export const CalendarTab: React.FC = () => {
                         ? 'text-slate-950'
                         : status === 'waiting_deposit'
                         ? 'text-amber-800'
-                        : status === 'booked'
-                        ? 'text-pink-800'
+                        : (status === 'booked' || isConfirmedBooked)
+                        ? 'text-rose-950 font-black'
                         : 'text-emerald-800'
                     }`}
                   >
@@ -941,8 +1177,8 @@ export const CalendarTab: React.FC = () => {
             <span className="text-slate-600 font-medium">متاح</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="w-3.5 h-3.5 rounded-full bg-[#FCE7F3] border border-pink-300" />
-            <span className="text-slate-600 font-medium">مؤكد (محجوز)</span>
+            <span className="w-3.5 h-3.5 rounded-full bg-[#FEE2E2] border-2 border-rose-500" />
+            <span className="text-rose-950 font-bold">مؤكد أحمر (لا يمكن الحجز عليه)</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="w-3.5 h-3.5 rounded-full bg-amber-100 border border-amber-300" />
@@ -1019,124 +1255,382 @@ export const CalendarTab: React.FC = () => {
           </div>
         </div>
 
-        {/* Tab Switcher between Pricing and Seasons */}
-        <div className="grid grid-cols-2 gap-2 sm:gap-3">
-          <button
-            type="button"
-            onClick={() => setPanelMode('seasons')}
-            className={`p-3 rounded-2xl border text-center transition-all cursor-pointer ${
-              panelMode === 'seasons'
-                ? 'border-2 border-purple-700 bg-white text-slate-900 shadow-sm'
-                : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            <span className="text-[10px] text-slate-400 block mb-0.5">الخانة الرابعة</span>
-            <span className="text-xs sm:text-sm font-bold block">أنماط المواسم</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setPanelMode('prices')}
-            className={`p-3 rounded-2xl border text-center transition-all cursor-pointer ${
-              panelMode === 'prices'
-                ? 'border-2 border-purple-700 bg-white text-slate-900 shadow-sm'
-                : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            <span className="text-[10px] text-slate-400 block mb-0.5">الخانة الثالثة</span>
-            <span className="text-xs sm:text-sm font-bold block">تحديد سعر الليلة</span>
-          </button>
-        </div>
-
-        {/* Custom Price Input */}
-        {panelMode === 'prices' && (
-          <div className="bg-[#FAF7FC] border border-purple-100/90 rounded-2xl p-4 sm:p-5 space-y-3">
-            <div className="flex items-center justify-end gap-1.5 text-xs sm:text-sm font-bold text-slate-800">
-              <span>إدخال سعر لليالي المحددة ({selectedDates.length} ليلة):</span>
-              <DollarSign className="w-4 h-4 text-purple-700" />
-            </div>
-            <div className="flex items-stretch gap-2.5">
+        {/* Admin Panel: Matches IMG_1632.jpeg exactly */}
+        {isAdmin && !previewAsMarketer ? (
+          <div className="bg-white border border-purple-100 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4 text-right">
+            {/* Top Bar: Nights Count + Reset Button */}
+            <div className="flex items-center justify-between">
+              <span className="font-extrabold text-slate-800 text-sm sm:text-base">
+                {nightsLabel}
+              </span>
               <button
                 type="button"
-                onClick={handleApplyPrice}
-                className="py-2.5 px-5 sm:px-6 bg-[#6B21A8] hover:bg-[#581C87] text-white rounded-2xl font-bold text-xs sm:text-sm flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
+                onClick={() => setSelectedDates([todayStr])}
+                className="w-8 h-8 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 flex items-center justify-center text-slate-600 transition-colors shadow-2xs cursor-pointer"
+                title="إعادة التعيين لليوم"
               >
-                {savedPriceSuccess ? (
-                  <span className="text-emerald-200 font-bold">✓ تم التطبيق</span>
-                ) : (
-                  <span>تطبيق السعر</span>
-                )}
+                <RotateCcw className="w-4 h-4" />
               </button>
-              <div className="flex-1">
-                <input
-                  type="number"
-                  step={50}
-                  value={priceInput}
-                  onChange={(e) => setPriceInput(Number(e.target.value))}
-                  className="w-full h-full min-h-[50px] bg-white border border-purple-200 rounded-2xl px-4 text-center sm:text-right text-xl sm:text-2xl font-bold text-slate-800 font-mono focus:outline-hidden focus:border-purple-600 focus:ring-2 focus:ring-purple-100 shadow-2xs"
-                  placeholder="3000"
-                />
+            </div>
+
+            {/* Centered Price Section with Pencil Edit Button */}
+            <div className="text-center pt-1 pb-2">
+              <span className="text-xs text-slate-500 font-semibold block mb-1">
+                إجمالي سعر الليالي
+              </span>
+              <div className="flex items-center justify-center gap-2">
+                <span className="font-black text-3xl sm:text-4xl text-purple-950 font-mono tracking-tight">
+                  {formatArabicCurrency(estimatedTotal)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsAdminPricingModalOpen(true)}
+                  className="w-8 h-8 rounded-xl border border-slate-200 bg-white hover:bg-purple-50 hover:border-purple-300 flex items-center justify-center text-purple-700 transition-colors shadow-2xs cursor-pointer shrink-0"
+                  title="تعديل السعر (نافذة تعديل السعر)"
+                >
+                  <Pencil className="w-4 h-4" />
+                </button>
+              </div>
+              <span className="text-xs text-slate-500 font-medium block mt-1.5 font-mono">
+                متوسط الليلة {formatArabicCurrency(avgNightlyPrice)}
+              </span>
+            </div>
+
+            {/* 3-Tab Segmented Control matching IMG_1632.jpeg */}
+            <div className="bg-[#F3EEFA]/80 p-1 rounded-2xl flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setPricingViewTab('partial')}
+                className={`flex-1 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                  pricingViewTab === 'partial'
+                    ? 'bg-white text-purple-950 font-black shadow-xs border border-purple-200/60'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                حجز جزئي
+              </button>
+              <button
+                type="button"
+                onClick={() => setPricingViewTab('full')}
+                className={`flex-1 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                  pricingViewTab === 'full'
+                    ? 'bg-white text-purple-950 font-black shadow-xs border border-purple-200/60'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                حجز كلي
+              </button>
+              <button
+                type="button"
+                onClick={() => setPricingViewTab('um_seif')}
+                className={`flex-1 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                  pricingViewTab === 'um_seif'
+                    ? 'bg-white text-purple-950 font-black shadow-xs border border-purple-200/60'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                أم سيف
+              </button>
+            </div>
+
+            {/* تفاصيل الربح التقديري */}
+            <div className="pt-2 space-y-2.5">
+              <h5 className="font-black text-sm sm:text-base text-slate-900">
+                تفاصيل الربح التقديري
+              </h5>
+
+              {pricingViewTab !== 'um_seif' ? (
+                <>
+                  {/* Row 1: إجمالي سعر الفترة */}
+                  <div className="flex items-center justify-between text-xs sm:text-sm py-1">
+                    <span className="text-slate-700 font-medium">إجمالي سعر الفترة</span>
+                    <span className="font-mono font-bold text-slate-900">
+                      {formatArabicCurrency(estimatedTotal)}
+                    </span>
+                  </div>
+
+                  {/* Row 2: عمولة المسوقة 5% */}
+                  <div className="flex items-center justify-between text-xs sm:text-sm py-1">
+                    <div>
+                      <span
+                        className={
+                          pricingViewTab === 'partial'
+                            ? 'font-black text-purple-950'
+                            : 'text-slate-700 font-medium'
+                        }
+                      >
+                        عمولة المسوقة {partialCommRate}%
+                      </span>
+                      {pricingViewTab === 'full' && (
+                        <span className="block text-[11px] text-slate-400">للمقارنة</span>
+                      )}
+                    </div>
+                    <span
+                      className={`font-mono ${
+                        pricingViewTab === 'partial'
+                          ? 'font-black text-purple-950 text-sm'
+                          : 'font-bold text-slate-700'
+                      }`}
+                    >
+                      {formatArabicCurrency(partialCommTotal)}
+                    </span>
+                  </div>
+
+                  {/* Row 3: عمولة المسوقة 7% */}
+                  <div className="flex items-center justify-between text-xs sm:text-sm py-1">
+                    <div>
+                      <span
+                        className={
+                          pricingViewTab === 'full'
+                            ? 'font-black text-purple-950'
+                            : 'text-slate-700 font-medium'
+                        }
+                      >
+                        عمولة المسوقة {fullCommRate}%
+                      </span>
+                      {pricingViewTab === 'partial' && (
+                        <span className="block text-[11px] text-slate-400">للمقارنة</span>
+                      )}
+                    </div>
+                    <span
+                      className={`font-mono ${
+                        pricingViewTab === 'full'
+                          ? 'font-black text-purple-950 text-sm'
+                          : 'font-bold text-slate-700'
+                      }`}
+                    >
+                      {formatArabicCurrency(fullCommTotal)}
+                    </span>
+                  </div>
+
+                  {/* Row 4: الرسوم الإدارية والتشغيلية */}
+                  <div className="flex items-center justify-between text-xs sm:text-sm py-1">
+                    <span className="text-slate-700 font-medium">الرسوم الإدارية والتشغيلية</span>
+                    <span className="font-mono font-bold text-slate-900">
+                      {formatArabicCurrency(totalAdminFees)}
+                    </span>
+                  </div>
+
+                  {/* Teal divider line as in IMG_1632.jpeg */}
+                  <div className="border-t border-[#8FD2C9] my-2" />
+
+                  {/* Row 5: صافي ربح المالك */}
+                  <div className="flex items-center justify-between text-sm sm:text-base py-1">
+                    <span className="font-black text-[#134E48]">صافي ربح المالك</span>
+                    <span className="font-black text-[#134E48] font-mono text-base sm:text-lg">
+                      {formatArabicCurrency(
+                        pricingViewTab === 'full' ? ownerNetProfitFull : ownerNetProfitPartial
+                      )}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                /* أم سيف Tab Details */
+                <>
+                  <div className="flex items-center justify-between text-xs sm:text-sm py-1">
+                    <span className="text-slate-700 font-medium">إجمالي سعر الفترة</span>
+                    <span className="font-mono font-bold text-slate-900">
+                      {formatArabicCurrency(estimatedTotal)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs sm:text-sm py-1">
+                    <span className="text-slate-700 font-medium">صافي الوحدة للمالك ({selectedNightsCount} ليلة)</span>
+                    <span className="font-mono font-bold text-slate-900">
+                      {formatArabicCurrency(totalUnitNet)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs sm:text-sm py-1">
+                    <div>
+                      <span className="font-black text-purple-950">صافي عمولة أم سيف</span>
+                      <span className="block text-[11px] text-purple-700">الفرق بين السعر وصافي الوحدة</span>
+                    </div>
+                    <span className="font-black text-purple-950 font-mono text-sm">
+                      {formatArabicCurrency(umSeifNetCommissionTotal)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs sm:text-sm py-1">
+                    <span className="text-slate-700 font-medium">الرسوم الإدارية (لصالح أم سيف)</span>
+                    <span className="font-mono font-bold text-purple-900">
+                      {formatArabicCurrency(totalAdminFees)}
+                    </span>
+                  </div>
+
+                  <div className="border-t border-purple-200 my-2" />
+
+                  <div className="flex items-center justify-between text-sm sm:text-base py-1">
+                    <span className="font-black text-purple-950">إجمالي مستحقات أم سيف</span>
+                    <span className="font-black text-purple-950 font-mono text-base sm:text-lg">
+                      {formatArabicCurrency(umSeifTotalDues)}
+                    </span>
+                  </div>
+                </>
+              )}
+
+              {/* Accordion: تفاصيل كل ليلة */}
+              <div className="pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowNightDetails((prev) => !prev)}
+                  className="w-full flex items-center justify-between text-xs font-bold text-slate-600 hover:text-slate-900 py-1 cursor-pointer transition-colors"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-slate-400">{showNightDetails ? '▼' : '◀'}</span>
+                    <span>تفاصيل كل ليلة</span>
+                  </span>
+                  <span className="text-[11px] text-purple-700 font-mono font-medium">
+                    {nightDetailsList.length} ليلة
+                  </span>
+                </button>
+
+                {showNightDetails && (
+                  <div className="mt-2.5 rounded-2xl border border-purple-100 bg-purple-50/40 p-3 space-y-2 text-xs animate-in fade-in duration-150">
+                    {nightDetailsList.map((item, idx) => (
+                      <div
+                        key={item.date}
+                        className="bg-white p-2.5 rounded-xl border border-slate-200/80 flex items-center justify-between"
+                      >
+                        <div>
+                          <span className="font-mono font-bold text-slate-800 block text-[11px]">
+                            {item.date}
+                          </span>
+                          <span className="text-[10px] text-slate-400">
+                            عمولة: {item.comm} ر.س · رسوم: {item.fee} ر.س
+                          </span>
+                        </div>
+                        <div className="text-left font-mono">
+                          <span className="font-bold text-slate-900 block text-xs">
+                            {item.price} ر.س
+                          </span>
+                          <span className="text-[10px] text-emerald-700 font-bold">
+                            صافي: {item.net} ر.س
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Admin toggle for Marketer View Preview */}
+              <div className="pt-2 flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={() => setPreviewAsMarketer(true)}
+                  className="text-purple-700 hover:text-purple-900 font-bold flex items-center gap-1.5 cursor-pointer text-xs transition-colors"
+                  title="معاينة ما يراه المسوق المعتمد"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>معاينة واجهة المسوق بالتقويم</span>
+                </button>
               </div>
             </div>
           </div>
-        )}
+        ) : (
+          /* Marketer Panel: Only Night Price and Commission at Partial & Full Bookings */
+          <div className="bg-white border-2 border-purple-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4 text-right">
+            {/* Top Bar for Marketer */}
+            <div className="flex items-center justify-between">
+              <span className="font-extrabold text-slate-800 text-sm sm:text-base">
+                {nightsLabel}
+              </span>
+              <div className="flex items-center gap-2">
+                {previewAsMarketer && (
+                  <button
+                    type="button"
+                    onClick={() => setPreviewAsMarketer(false)}
+                    className="text-xs bg-purple-700 hover:bg-purple-800 text-white px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer shadow-xs"
+                  >
+                    العودة للإدارة
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedDates([todayStr])}
+                  className="w-8 h-8 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 flex items-center justify-center text-slate-600 transition-colors shadow-2xs cursor-pointer"
+                  title="إعادة التعيين لليوم"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
 
-        {/* Seasons Preset Patterns */}
-        {panelMode === 'seasons' && (
-          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2.5 animate-in fade-in duration-150">
-            <p className="text-xs text-slate-700 font-semibold">
-              تطبيق تسعيرة المواسم الجاهزة على الأيام المحددة ({selectedDates.length} يوم):
-            </p>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 text-xs">
-              <button
-                type="button"
-                onClick={() => handleApplySeason('weekday')}
-                className="p-2.5 rounded-xl border border-purple-200 bg-white hover:bg-purple-50 text-slate-800 text-center font-bold cursor-pointer"
-              >
-                <span>وسط الأسبوع</span>
-                <span className="block text-[11px] text-purple-700 font-mono mt-0.5">
-                  {seasonalPrices.weekday} ر.س
+            {/* 1. سعر الليلة للمسوق */}
+            <div className="bg-[#FAF7FC] border border-purple-100 p-4 rounded-2xl text-center space-y-1">
+              <span className="text-xs font-bold text-slate-500 block">
+                المبلغ المحدد / سعر الليلة
+              </span>
+              <div className="flex items-baseline justify-center gap-1.5 font-mono">
+                <span className="text-3xl sm:text-4xl font-black text-purple-950">
+                  {currentNightlyPrice.toLocaleString('ar-SA')}
                 </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleApplySeason('weekend')}
-                className="p-2.5 rounded-xl border border-purple-200 bg-white hover:bg-purple-50 text-slate-800 text-center font-bold cursor-pointer"
-              >
-                <span>الويكند</span>
-                <span className="block text-[11px] text-purple-700 font-mono mt-0.5">
-                  {seasonalPrices.weekend} ر.س
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleApplySeason('summer')}
-                className="p-2.5 rounded-xl border border-purple-200 bg-white hover:bg-purple-50 text-slate-800 text-center font-bold cursor-pointer"
-              >
-                <span>الصيف</span>
-                <span className="block text-[11px] text-purple-700 font-mono mt-0.5">
-                  {seasonalPrices.summer} ر.س
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleApplySeason('eid')}
-                className="p-2.5 rounded-xl border border-purple-200 bg-white hover:bg-purple-50 text-slate-800 text-center font-bold cursor-pointer"
-              >
-                <span>الأعياد</span>
-                <span className="block text-[11px] text-purple-700 font-mono mt-0.5">
-                  {seasonalPrices.eid} ر.س
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleApplySeason('vacation')}
-                className="p-2.5 rounded-xl border border-purple-200 bg-white hover:bg-purple-50 text-slate-800 text-center font-bold col-span-2 sm:col-span-1 cursor-pointer"
-              >
-                <span>الإجازات</span>
-                <span className="block text-[11px] text-purple-700 font-mono mt-0.5">
-                  {seasonalPrices.vacation} ر.س
-                </span>
-              </button>
+                <span className="text-xs font-bold text-slate-600">ر.س / ليلة</span>
+              </div>
+              {selectedDates.length > 1 && (
+                <p className="text-xs text-purple-800 font-mono font-medium pt-1.5 border-t border-purple-100/60 mt-1">
+                  متوسط الليلة {avgNightlyPrice.toLocaleString('ar-SA')} ر.س · إجمالي الفترة ({selectedDates.length} ليالٍ):{' '}
+                  <strong className="text-purple-950 font-bold font-mono">{estimatedTotal.toLocaleString('ar-SA')} ر.س</strong>
+                </p>
+              )}
+            </div>
+
+            {/* 2. عمولة المسوق عند الحجز الجزئي وعند الحجز الكلي فقط */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              {/* عمولة الحجز الجزئي */}
+              <div className="bg-purple-50/60 border border-purple-200 p-4 rounded-2xl space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-purple-950 block">
+                    عمولة الحجز الجزئي
+                  </span>
+                  <span className="text-[10px] bg-purple-200/80 text-purple-900 px-2 py-0.5 rounded-full font-black font-mono">
+                    نسبة {partialCommRate}%
+                  </span>
+                </div>
+                <div className="flex items-baseline gap-1 font-mono">
+                  <span className="text-2xl font-black text-purple-950">
+                    {Math.round(currentNightlyPrice * (partialCommRate / 100)).toLocaleString('ar-SA')}
+                  </span>
+                  <span className="text-xs font-bold text-purple-800">ر.س / ليلة</span>
+                </div>
+                <div className="pt-1.5 border-t border-purple-200/60 text-[11px] text-purple-900 font-medium space-y-0.5">
+                  <p>
+                    إجمالي عمولة الفترة:{' '}
+                    <strong className="font-mono font-black text-purple-950">
+                      {partialCommTotal.toLocaleString('ar-SA')} ر.س
+                    </strong>
+                  </p>
+                  <p className="text-[10px] text-purple-700">تُصرف لحسابك فور تأكيد الحجز الجزئي</p>
+                </div>
+              </div>
+
+              {/* عمولة الحجز الكلي */}
+              <div className="bg-emerald-50/70 border-2 border-emerald-300 p-4 rounded-2xl space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-emerald-950 block">
+                    عمولة الحجز الكلي
+                  </span>
+                  <span className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded-full font-black font-mono">
+                    نسبة {fullCommRate}%
+                  </span>
+                </div>
+                <div className="flex items-baseline gap-1 font-mono">
+                  <span className="text-2xl font-black text-emerald-950">
+                    {Math.round(currentNightlyPrice * (fullCommRate / 100)).toLocaleString('ar-SA')}
+                  </span>
+                  <span className="text-xs font-bold text-emerald-800">ر.س / ليلة</span>
+                </div>
+                <div className="pt-1.5 border-t border-emerald-200 text-[11px] text-emerald-900 font-medium space-y-0.5">
+                  <p>
+                    إجمالي عمولة الفترة:{' '}
+                    <strong className="font-mono font-black text-emerald-950">
+                      {fullCommTotal.toLocaleString('ar-SA')} ر.س
+                    </strong>
+                  </p>
+                  <p className="text-[10px] text-emerald-700">تُصرف لحسابك فور تأكيد الحجز ومتابعته</p>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -1214,39 +1708,128 @@ export const CalendarTab: React.FC = () => {
           </div>
         </div>
 
-        <button
-          disabled={checkInDate < todayStr || selectedDates.some((d) => isDateBooked(d))}
-          onClick={() => {
-            if (checkInDate < todayStr) return;
-            if (selectedDates.some((d) => isDateBooked(d))) {
-              showBlockedAlert('اليوم محجوز ومؤكد ولا يمكن تكرار الحجز');
-              return;
-            }
-            setPreselectedDateForBooking(checkInDate);
-            if (activeSectionId && activeSectionId !== 'all') {
-              setPreselectedSectionForBooking(activeSectionId);
-            }
-            setActiveTab('bookings');
-          }}
-          className={`w-full py-3.5 sm:py-4 rounded-2xl font-bold text-xs sm:text-sm shadow-md flex items-center justify-center gap-2 transition-all ${
-            selectedDates.some((d) => isDateBooked(d))
-              ? 'bg-rose-100 text-rose-900 border border-rose-300 cursor-not-allowed shadow-none font-black'
-              : checkInDate < todayStr
-              ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
-              : 'btn-mauve-shiny text-white cursor-pointer'
-          }`}
-        >
-          <Sparkles className="w-4 h-4 text-purple-200" />
-          <span>
-            {selectedDates.some((d) => isDateBooked(d))
-              ? 'اليوم محجوز ومؤكد ولا يمكن تكرار الحجز'
-              : checkInDate < todayStr
-              ? 'التاريخ المحدد فائت — يرجى اختيار تاريخ اليوم أو تاريخ قادم للحجز'
-              : activeSection
-              ? `المتابعة لحجز (${activeSection.name}) وطلب العربون (15 دقيقة)`
-              : 'المتابعة إلى صفحة الحجوزات وطلب العربون (15 دقيقة)'}
-          </span>
-        </button>
+        {/* Hamran Services & Discount notice */}
+        <div className="p-3 bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200/90 rounded-2xl flex items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-2 text-purple-950 font-bold">
+            <Sparkles className="w-4 h-4 text-purple-700 shrink-0" />
+            <span>
+              {selectedPropertyId === 'hamran'
+                ? 'قسم خدمات حمران وطلب الخصم متاح بالحجز: إضافة الخدمات (كالمساج) تضاف للعقد تلقائياً + طلب خصم معتمد (كإلغاء الفطور).'
+                : `قسم خدمات ${selectedProperty.name} وطلب الخصم متاح بالحجز الجديد مع اعتماد الإدارة للخصم.`}
+            </span>
+          </div>
+        </div>
+
+        {(() => {
+          const isSelectionConsecutive = areDatesConsecutive(selectedDates);
+          const hasBookedInSelection = selectedDates.some((d) => isDateBooked(d));
+          const isButtonBlocked = checkInDate < todayStr || hasBookedInSelection || !isSelectionConsecutive;
+
+          return (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {/* Main button: Proceed to Bookings Tab with prefilled unit and dates */}
+              <button
+                disabled={isButtonBlocked}
+                onClick={() => {
+                  if (checkInDate < todayStr) return;
+                  if (!isSelectionConsecutive) {
+                    showBlockedAlert('تحديد أيام الحجز لازم تكون متصلة — يمنع النظام أخذ أيام متفرقة للحجز الواحد');
+                    return;
+                  }
+                  if (hasBookedInSelection) {
+                    showBlockedAlert('الحجز يتخلله أيام محجوزة');
+                    return;
+                  }
+                  setPreselectedDateForBooking(checkInDate);
+                  setPreselectedDatesForBooking(selectedDates);
+                  if (activeSectionId && activeSectionId !== 'all') {
+                    setPreselectedSectionForBooking(activeSectionId);
+                  }
+                  if (pricingViewTab === 'partial') {
+                    setPreselectedCommissionType('partial');
+                  } else if (pricingViewTab === 'full') {
+                    setPreselectedCommissionType('full');
+                  }
+                  setActiveTab('bookings');
+                }}
+                className={`py-3.5 sm:py-4 px-3 rounded-2xl font-bold text-xs sm:text-sm shadow-md flex items-center justify-center gap-2 transition-all ${
+                  hasBookedInSelection
+                    ? 'bg-rose-100 text-rose-900 border-2 border-rose-400 cursor-not-allowed shadow-none font-black'
+                    : !isSelectionConsecutive
+                    ? 'bg-amber-100 text-amber-900 border-2 border-amber-400 cursor-not-allowed shadow-none font-black'
+                    : checkInDate < todayStr
+                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                    : 'btn-mauve-shiny text-white cursor-pointer'
+                }`}
+              >
+                {hasBookedInSelection ? (
+                  <>
+                    <span className="text-rose-600 font-black">⚠️</span>
+                    <span>الحجز يتخلله أيام محجوزة</span>
+                  </>
+                ) : !isSelectionConsecutive ? (
+                  <>
+                    <span className="text-amber-600 font-black">⚠️</span>
+                    <span>تحديد أيام الحجز لازم تكون متصلة</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 text-purple-200" />
+                    <span>
+                      {activeSection
+                        ? `المتابعة لحجز (${activeSection.name}) وحقول الحجز الجديد`
+                        : 'المتابعة لحقول الحجز الجديد وطلب العربون'}
+                    </span>
+                  </>
+                )}
+              </button>
+
+              {/* Quick Instant Booking Modal */}
+              <button
+                type="button"
+                disabled={isButtonBlocked}
+                onClick={() => {
+                  if (checkInDate < todayStr) return;
+                  if (!isSelectionConsecutive) {
+                    showBlockedAlert('تحديد أيام الحجز لازم تكون متصلة — يمنع النظام أخذ أيام متفرقة للحجز الواحد');
+                    return;
+                  }
+                  if (hasBookedInSelection) {
+                    showBlockedAlert('الحجز يتخلله أيام محجوزة');
+                    return;
+                  }
+                  setPreselectedDateForBooking(checkInDate);
+                  setPreselectedDatesForBooking(selectedDates);
+                  if (activeSectionId && activeSectionId !== 'all') {
+                    setPreselectedSectionForBooking(activeSectionId);
+                  }
+                  if (pricingViewTab === 'partial') {
+                    setPreselectedCommissionType('partial');
+                  } else if (pricingViewTab === 'full') {
+                    setPreselectedCommissionType('full');
+                  }
+                  setBookingModalOpen(true);
+                }}
+                className={`py-3.5 sm:py-4 px-3 rounded-2xl font-bold text-xs sm:text-sm border-2 ${
+                  hasBookedInSelection
+                    ? 'border-rose-300 bg-rose-50 text-rose-900 cursor-not-allowed font-black'
+                    : !isSelectionConsecutive
+                    ? 'border-amber-300 bg-amber-50 text-amber-900 cursor-not-allowed font-black'
+                    : 'border-purple-300 bg-purple-50 hover:bg-purple-100 text-purple-950 cursor-pointer shadow-xs'
+                } flex items-center justify-center gap-2 transition-all disabled:opacity-70`}
+              >
+                <CalendarDays className="w-4 h-4 text-purple-700" />
+                <span>
+                  {hasBookedInSelection
+                    ? 'الحجز يتخلله أيام محجوزة'
+                    : !isSelectionConsecutive
+                    ? 'الأيام متفرقة — يلزم فترات متصلة'
+                    : 'فتح نافذة الحجز الفوري السريع'}
+                </span>
+              </button>
+            </div>
+          );
+        })()}
       </div>
 
       {/* iCal Synchronization Modal */}
@@ -1454,7 +2037,7 @@ export const CalendarTab: React.FC = () => {
         </div>
       )}
 
-      {/* Modals for adding properties and units */}
+      {/* Modals for adding properties, units and admin pricing */}
       <AddPropertyModal
         isOpen={isAddPropertyModalOpen}
         onClose={() => setIsAddPropertyModalOpen(false)}
@@ -1464,6 +2047,16 @@ export const CalendarTab: React.FC = () => {
         isOpen={isAddUnitModalOpen}
         onClose={() => setIsAddUnitModalOpen(false)}
         targetPropertyId={selectedPropertyId}
+      />
+
+      <AdminPricingModal
+        isOpen={isAdminPricingModalOpen}
+        onClose={() => setIsAdminPricingModalOpen(false)}
+        selectedDates={selectedDates}
+        selectedProperty={selectedProperty}
+        activeSection={activeSection || undefined}
+        currentOverride={currentDateOverride}
+        onSave={handleSaveAdminPricing}
       />
     </div>
   );

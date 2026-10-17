@@ -17,6 +17,7 @@ export const STORAGE_KEYS = {
   RESET_TOKENS: 'amasa_reset_tokens_v1',
   CALENDAR_SYNC_STATUS: 'property_calendar_sync_status',
   CALENDAR_SYNC_URLS: 'property_calendar_sync_urls',
+  OPERATING_SETTINGS: 'amasa_operating_settings_v1',
 } as const;
 
 export class StorageService {

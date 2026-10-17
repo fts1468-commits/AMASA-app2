@@ -30,9 +30,11 @@ import {
   ArrowRight,
   CalendarDays,
   Copy,
+  Flame,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Marketer, MarketerPermissions, UserRole } from '../../types';
+import { OperatingSettingsSection } from './OperatingSettingsSection';
 
 interface MarketersTabProps {
   embedded?: boolean;
@@ -60,7 +62,7 @@ export const MarketersTab: React.FC<MarketersTabProps> = ({ embedded = false }) 
     updateGuardProfile,
   } = useApp();
 
-  const [activeSubTab, setActiveSubTab] = useState<'commissions' | 'profile' | 'permissions'>('commissions');
+  const [activeSubTab, setActiveSubTab] = useState<'commissions' | 'profile' | 'operating_settings' | 'permissions'>('commissions');
   const [selectedMarketerId, setSelectedMarketerId] = useState<string>(
     userRole === 'marketer' && currentMarketerId ? currentMarketerId : marketers[0]?.id || 'm1'
   );
@@ -184,21 +186,26 @@ export const MarketersTab: React.FC<MarketersTabProps> = ({ embedded = false }) 
 
       const completedSales = completedBks.reduce((sum, b) => sum + (b.totalPrice || 0), 0);
 
+      const getBkCommission = (b: any) =>
+        b.marketerCommission !== undefined
+          ? b.marketerCommission
+          : Math.round((b.totalPrice || 0) * (b.commissionRatePercent ? b.commissionRatePercent / 100 : 0.05));
+
       const totalCommission = allBks
         .filter((b) => b.status !== 'cancelled')
-        .reduce((sum, b) => sum + (b.marketerCommission || Math.round((b.totalPrice || 0) * 0.05)), 0);
+        .reduce((sum, b) => sum + getBkCommission(b), 0);
 
       const paidCommission = allBks
         .filter((b) => b.commissionStatus === 'paid')
-        .reduce((sum, b) => sum + (b.marketerCommission || Math.round((b.totalPrice || 0) * 0.05)), 0);
+        .reduce((sum, b) => sum + getBkCommission(b), 0);
 
       const readyCommission = allBks
         .filter((b) => b.commissionStatus === 'ready_for_payout')
-        .reduce((sum, b) => sum + (b.marketerCommission || Math.round((b.totalPrice || 0) * 0.05)), 0);
+        .reduce((sum, b) => sum + getBkCommission(b), 0);
 
       const pendingCommission = allBks
         .filter((b) => b.commissionStatus === 'pending')
-        .reduce((sum, b) => sum + (b.marketerCommission || Math.round((b.totalPrice || 0) * 0.05)), 0);
+        .reduce((sum, b) => sum + getBkCommission(b), 0);
 
       const totalDueCommission = readyCommission + pendingCommission;
       const completionRate = allBks.length > 0 ? Math.round((completedBks.length / allBks.length) * 100) : 0;
@@ -279,8 +286,10 @@ export const MarketersTab: React.FC<MarketersTabProps> = ({ embedded = false }) 
       b.checkOutDate,
       b.nightsCount,
       b.totalPrice,
-      '5%',
-      b.marketerCommission || Math.round((b.totalPrice || 0) * 0.05),
+      b.commissionRatePercent ? `${b.commissionRatePercent}%` : '5%',
+      b.marketerCommission !== undefined
+        ? b.marketerCommission
+        : Math.round((b.totalPrice || 0) * (b.commissionRatePercent ? b.commissionRatePercent / 100 : 0.05)),
       b.status === 'completed' ? 'مكتمل' : 'مؤكد',
       b.commissionStatus === 'paid' ? 'مسددة ومحولة' : b.commissionStatus === 'ready_for_payout' ? 'جاهزة للصرف' : 'قيد الانتظار',
     ]);
@@ -515,7 +524,7 @@ export const MarketersTab: React.FC<MarketersTabProps> = ({ embedded = false }) 
       )}
 
       {/* Sub Tabs Switcher */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 p-1.5 bg-purple-100/70 rounded-2xl border border-purple-200/80">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1.5 bg-purple-100/70 rounded-2xl border border-purple-200/80">
         <button
           onClick={() => setActiveSubTab('commissions')}
           className={`py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
@@ -525,7 +534,7 @@ export const MarketersTab: React.FC<MarketersTabProps> = ({ embedded = false }) 
           }`}
         >
           <Wallet className="w-4 h-4" />
-          <span>كشف العمولات والمبالغ (خاص بالمسوق)</span>
+          <span>كشف العمولات</span>
         </button>
 
         <button
@@ -537,7 +546,19 @@ export const MarketersTab: React.FC<MarketersTabProps> = ({ embedded = false }) 
           }`}
         >
           <Briefcase className="w-4 h-4" />
-          <span>الملف الشخصي والعقد المبرم</span>
+          <span>الملف والعقد</span>
+        </button>
+
+        <button
+          onClick={() => setActiveSubTab('operating_settings')}
+          className={`py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+            activeSubTab === 'operating_settings'
+              ? 'bg-purple-900 text-white shadow-sm'
+              : 'text-purple-900 hover:text-purple-950 hover:bg-purple-200/40'
+          }`}
+        >
+          <Flame className="w-4 h-4 text-amber-500 fill-amber-500 animate-pulse" />
+          <span>إعدادات التشغيل والعمولة</span>
         </button>
 
         <button
@@ -975,10 +996,14 @@ export const MarketersTab: React.FC<MarketersTabProps> = ({ embedded = false }) 
                       <td className="py-3 px-3 font-mono">
                         {marketerFilteredBookings.reduce((sum, b) => sum + (b.totalPrice || 0), 0)} ر.س
                       </td>
-                      <td className="py-3 px-3 font-mono">5%</td>
+                      <td className="py-3 px-3 font-mono text-[11px] text-purple-700">معتمد</td>
                       <td className="py-3 px-3 font-mono text-purple-950 font-black text-xs">
                         {marketerFilteredBookings.reduce(
-                          (sum, b) => sum + (b.marketerCommission || Math.round((b.totalPrice || 0) * 0.05)),
+                          (sum, b) =>
+                            sum +
+                            (b.marketerCommission !== undefined
+                              ? b.marketerCommission
+                              : Math.round((b.totalPrice || 0) * (b.commissionRatePercent ? b.commissionRatePercent / 100 : 0.05))),
                           0
                         )}{' '}
                         ر.س
@@ -1142,9 +1167,42 @@ export const MarketersTab: React.FC<MarketersTabProps> = ({ embedded = false }) 
         </div>
       )}
 
+      {/* SUB-TAB: OPERATING SETTINGS & COMMISSIONS */}
+      {activeSubTab === 'operating_settings' && (
+        <div className="animate-in fade-in duration-200">
+          <OperatingSettingsSection />
+        </div>
+      )}
+
       {/* SUB-TAB 3: PERMISSIONS MATRIX */}
       {activeSubTab === 'permissions' && currentMarketer && (
         <div className="bg-white rounded-3xl p-5 shadow-xs border border-purple-100 space-y-5">
+          {/* Flame Icon Banner: إعدادات التشغيل والعمولة قبل مصفوفة الصلاحيات */}
+          <div className="bg-gradient-to-r from-purple-50 via-amber-50/60 to-purple-50 border border-purple-200 rounded-2xl p-3.5 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-2xs">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white flex items-center justify-center shadow-xs shrink-0">
+                <Flame className="w-5 h-5 fill-white text-white animate-pulse" />
+              </div>
+              <div className="text-right">
+                <h5 className="font-bold text-xs sm:text-sm text-slate-900 flex items-center gap-1.5">
+                  <span>إعدادات التشغيل والعمولة (مربوطة بالتقويم)</span>
+                  <span className="text-[10px] bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full font-bold">إدارة حصرية</span>
+                </h5>
+                <p className="text-[11px] text-slate-600">
+                  تحديد الرسوم الإدارية لكل ليلة، أيام الويكند، نسب العمولات، ومكافأة الإنجاز الشهرية.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('operating_settings')}
+              className="px-4 py-2 bg-[#6B21A8] hover:bg-[#581C87] text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-xs shrink-0 active:scale-95"
+            >
+              <Flame className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
+              <span>فتح وضبط إعدادات التشغيل والعمولة</span>
+            </button>
+          </div>
+
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
             <div>
               <h4 className="font-bold text-slate-900 text-base flex items-center gap-2">

@@ -20,6 +20,8 @@ import {
   Clock,
   Send,
   AlertTriangle,
+  Percent,
+  Sparkles,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Booking } from '../../types';
@@ -51,12 +53,17 @@ export const DashboardTab: React.FC = () => {
     currentMarketerId,
     completeBookingPayment,
     sendPaymentCompletionRequest,
+    respondToBookingDiscount,
+    requestBookingDiscount,
   } = useApp();
 
   const [guardConfirm, setGuardConfirm] = useState<GuardActionModalData | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [selectedBookingForDetails, setSelectedBookingForDetails] = useState<Booking | null>(null);
   const [detailsTitle, setDetailsTitle] = useState('تفاصيل الحجز');
+  const [showReqDiscountInModal, setShowReqDiscountInModal] = useState(false);
+  const [reqDiscountAmount, setReqDiscountAmount] = useState(100);
+  const [reqDiscountReason, setReqDiscountReason] = useState('إلغاء الفطور');
 
   // Complete payment modal state
   const [paymentModalBooking, setPaymentModalBooking] = useState<Booking | null>(null);
@@ -107,6 +114,10 @@ export const DashboardTab: React.FC = () => {
     if (isAdmin || isGuard) return todayArrivals;
     return todayArrivals.filter((b) => b.marketerId === currentMarketerId);
   }, [todayArrivals, isAdmin, isGuard, currentMarketerId]);
+
+  const pendingDiscountBookings = useMemo(() => {
+    return bookings.filter((b) => b.discountStatus === 'pending_approval');
+  }, [bookings]);
 
   const matchesSearch = (b: Booking) => {
     if (!searchTerm.trim()) return true;
@@ -501,6 +512,67 @@ export const DashboardTab: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Management Pending Discount Approval Alert Banner */}
+      {isAdmin && pendingDiscountBookings.length > 0 && (
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-300 rounded-3xl p-4 shadow-sm space-y-3 text-right">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-amber-900 bg-amber-200/90 px-3 py-1 rounded-full font-mono">
+              {pendingDiscountBookings.length} طلب بانتظار الموافقة
+            </span>
+            <div className="flex items-center gap-2">
+              <h3 className="font-extrabold text-sm sm:text-base text-amber-950">
+                طلبات الخصم بانتظار موافقة الإدارة (مثل إلغاء الفطور)
+              </h3>
+              <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shadow-xs">
+                <Percent className="w-4 h-4" />
+              </div>
+            </div>
+          </div>
+          <p className="text-[11px] text-amber-800 leading-relaxed font-medium">
+            يصل تنبيه للإدارة عند طلب الخصم. بعد الموافقة، يتحدث سعر الحجز بالتقويم والعقد وتُحسب عمولة المسوق على السعر بعد الخصم:
+          </p>
+          <div className="space-y-2">
+            {pendingDiscountBookings.map((b) => (
+              <div
+                key={b.id}
+                className="bg-white p-3.5 rounded-2xl border border-amber-200/90 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs"
+              >
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-900 text-xs sm:text-sm">{b.customerName}</span>
+                    <span className="font-mono text-[10px] text-purple-700 bg-purple-50 px-2 py-0.5 rounded font-bold border border-purple-200">
+                      {b.bookingNumber}
+                    </span>
+                    <span className="text-[11px] text-slate-500">({b.propertyName})</span>
+                  </div>
+                  <p className="text-xs text-amber-900 mt-1">
+                    مبلغ الخصم المطلوب: <strong className="font-mono text-amber-700 font-black text-sm">{b.discountRequestedAmount || b.discount} ر.س</strong> — السبب: <span className="font-bold text-slate-800">{b.discountReason || 'إلغاء الفطور'}</span>
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 self-end sm:self-center">
+                  <button
+                    type="button"
+                    onClick={() => respondToBookingDiscount(b.id, true)}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>الموافقة على الخصم</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => respondToBookingDiscount(b.id, false)}
+                    className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>رفض الخصم</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* TODAY'S ARRIVALS TABLE */}
       {(activeFilter === 'arrivals' || activeFilter === 'all') && (
@@ -1163,26 +1235,178 @@ export const DashboardTab: React.FC = () => {
                 </span>
               </div>
 
-              <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-500">المبلغ الإجمالي:</span>
-                <span className="font-bold text-slate-900 font-mono text-sm">{selectedBookingForDetails.totalPrice} ر.س</span>
-              </div>
+              {/* Extra Services List if any */}
+              {selectedBookingForDetails.extraServices && selectedBookingForDetails.extraServices.length > 0 && (
+                <div className="p-3 bg-purple-50/70 rounded-2xl border border-purple-200/90 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-purple-950 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-purple-700" />
+                      <span>الخدمات الإضافية (تضاف للعقد والعرض دون موافقة الإدارة):</span>
+                    </span>
+                    <span className="font-mono font-black text-purple-950 text-xs">
+                      +{selectedBookingForDetails.extraServicesTotal || selectedBookingForDetails.extraServices.reduce((a, b) => a + (Number(b.price) || 0), 0)} ر.س
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    {selectedBookingForDetails.extraServices.map((svc) => (
+                      <div key={svc.id} className="flex justify-between items-center text-[11px] text-slate-800 bg-white/80 px-2.5 py-1 rounded-lg">
+                        <span>• {svc.name}</span>
+                        <span className="font-mono font-bold text-purple-900">{svc.price} ر.س</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-purple-800">ℹ️ مبلغ الخدمات الإضافية لا يدخل في التقويم أو العمولة.</p>
+                </div>
+              )}
 
-              <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-500">العربون المدفوع:</span>
-                <span className="font-bold text-emerald-700 font-mono">{selectedBookingForDetails.depositPaid} ر.س</span>
-              </div>
+              {/* Discount Section & Management Approval Flow */}
+              {selectedBookingForDetails.discountStatus === 'pending_approval' ? (
+                <div className="p-3 bg-amber-50 rounded-2xl border-2 border-amber-300 space-y-2 text-right">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-amber-950 text-xs flex items-center gap-1.5">
+                      <Percent className="w-3.5 h-3.5 text-amber-600" />
+                      <span>طلب خصم بانتظار موافقة الإدارة:</span>
+                    </span>
+                    <span className="font-mono font-black text-amber-900 text-sm">
+                      {selectedBookingForDetails.discountRequestedAmount || selectedBookingForDetails.discount} ر.س
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-amber-800">
+                    السبب: <strong>{selectedBookingForDetails.discountReason || 'إلغاء الفطور'}</strong>
+                  </p>
+                  {isAdmin ? (
+                    <div className="flex items-center gap-2 pt-1 border-t border-amber-200">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          respondToBookingDiscount(selectedBookingForDetails.id, true);
+                          setSelectedBookingForDetails(null);
+                        }}
+                        className="flex-1 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-1 shadow-xs cursor-pointer"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>الموافقة على الخصم</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          respondToBookingDiscount(selectedBookingForDetails.id, false);
+                          setSelectedBookingForDetails(null);
+                        }}
+                        className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 rounded-xl font-bold text-xs flex items-center justify-center gap-1 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>رفض الخصم</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-amber-700 italic">⏳ بانتظار مراجعة الإدارة والموافقة أو الرفض</p>
+                  )}
+                </div>
+              ) : selectedBookingForDetails.discountStatus === 'approved' ? (
+                <div className="p-2.5 bg-emerald-50 rounded-xl border border-emerald-200 flex justify-between items-center text-xs text-emerald-900">
+                  <span className="flex items-center gap-1 font-bold">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>خصم معتمد ({selectedBookingForDetails.discountReason || 'إلغاء الفطور'}):</span>
+                  </span>
+                  <span className="font-mono font-black text-emerald-800">-{selectedBookingForDetails.discount} ر.س</span>
+                </div>
+              ) : selectedBookingForDetails.discountStatus === 'rejected' ? (
+                <div className="p-2 bg-rose-50 rounded-xl border border-rose-200 flex justify-between items-center text-xs text-rose-900">
+                  <span className="flex items-center gap-1 font-bold">
+                    <X className="w-3.5 h-3.5 text-rose-600" />
+                    <span>تم رفض طلب الخصم من قبل الإدارة</span>
+                  </span>
+                  <span className="text-[10px] text-rose-600 font-mono">0 ر.س</span>
+                </div>
+              ) : (
+                <div className="flex justify-end pt-0.5">
+                  {!showReqDiscountInModal ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowReqDiscountInModal(true)}
+                      className="text-[11px] text-purple-700 hover:text-purple-900 font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Percent className="w-3.5 h-3.5 text-amber-600" />
+                      <span>إرسال طلب الخصم للإدارة (مثل إلغاء الفطور)</span>
+                    </button>
+                  ) : (
+                    <div className="w-full p-2.5 bg-purple-50/80 rounded-2xl border border-purple-200 space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="font-bold text-xs text-purple-950">طلب خصم للإدارة:</span>
+                        <button
+                          type="button"
+                          onClick={() => setShowReqDiscountInModal(false)}
+                          className="text-slate-400 hover:text-slate-600 text-xs cursor-pointer"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="number"
+                          value={reqDiscountAmount}
+                          onChange={(e) => setReqDiscountAmount(Math.max(0, Number(e.target.value)))}
+                          placeholder="مبلغ الخصم"
+                          className="w-full bg-white border border-purple-200 rounded-xl py-1 px-2 text-xs font-mono font-bold"
+                        />
+                        <input
+                          type="text"
+                          value={reqDiscountReason}
+                          onChange={(e) => setReqDiscountReason(e.target.value)}
+                          placeholder="السبب (إلغاء الفطور)"
+                          className="w-full bg-white border border-purple-200 rounded-xl py-1 px-2 text-xs"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (reqDiscountAmount <= 0) return;
+                          requestBookingDiscount(selectedBookingForDetails.id, reqDiscountAmount, reqDiscountReason || 'إلغاء الفطور');
+                          setShowReqDiscountInModal(false);
+                          setSelectedBookingForDetails(null);
+                        }}
+                        className="w-full py-1.5 bg-purple-700 hover:bg-purple-800 text-white rounded-xl font-bold text-xs cursor-pointer shadow-xs"
+                      >
+                        إرسال الطلب للإدارة
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
 
-              <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-500">المبلغ المتبقي للتحصيل:</span>
-                <span className="font-bold text-purple-900 font-mono">{selectedBookingForDetails.remainingAmount} ر.س</span>
-              </div>
+              {/* Exact Breakdown matching user specification */}
+              <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80 space-y-1.5 text-xs">
+                <div className="flex justify-between py-0.5">
+                  <span className="text-slate-500">سعر التقويم وأساس العمولة:</span>
+                  <span className="font-black text-purple-950 font-mono text-sm">
+                    {selectedBookingForDetails.calendarPrice || selectedBookingForDetails.totalPrice} ر.س
+                  </span>
+                </div>
 
-              <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-500">مبلغ التأمين المسترد:</span>
-                <span className="font-bold text-amber-700 font-mono">
-                  {selectedBookingForDetails.insuranceAmount} ر.س ({selectedBookingForDetails.insuranceReturned ? 'تم التسليم' : 'معلق'})
-                </span>
+                <div className="flex justify-between py-0.5 border-t border-slate-200/60 pt-1">
+                  <span className="text-slate-800 font-bold">✅ إجمالي العميل في العرض والعقد:</span>
+                  <span className="font-black text-amber-700 font-mono text-sm">
+                    {selectedBookingForDetails.clientTotal || (selectedBookingForDetails.totalPrice + (selectedBookingForDetails.extraServicesTotal || 0))} ر.س
+                  </span>
+                </div>
+
+                <div className="flex justify-between py-0.5">
+                  <span className="text-slate-500">العربون المدفوع:</span>
+                  <span className="font-bold text-emerald-700 font-mono">{selectedBookingForDetails.depositPaid} ر.س</span>
+                </div>
+
+                <div className="flex justify-between py-0.5">
+                  <span className="text-slate-500">المبلغ المتبقي للتحصيل:</span>
+                  <span className="font-bold text-purple-900 font-mono">{selectedBookingForDetails.remainingAmount} ر.س</span>
+                </div>
+
+                <div className="flex justify-between py-0.5 border-t border-slate-200/60 pt-1">
+                  <span className="text-slate-500">مبلغ التأمين المسترد (مستقل):</span>
+                  <span className="font-bold text-amber-700 font-mono">
+                    {selectedBookingForDetails.insuranceAmount} ر.س ({selectedBookingForDetails.insuranceReturned ? 'تم التسليم' : 'معلق'})
+                  </span>
+                </div>
               </div>
 
               {selectedBookingForDetails.paymentReceiptName && (
